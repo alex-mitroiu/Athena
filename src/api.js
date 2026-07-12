@@ -72,3 +72,7 @@ export const api = {
     remove:  (id)                   => req("DELETE", `/kb/columns/${id}`),
   },
 };
+
+// Aliases — KanbanPage uses api.kbVersions; ReleasesPage uses api.projects
+api.kbVersions = api.versions;
+api.projects   = api.kbProjects;

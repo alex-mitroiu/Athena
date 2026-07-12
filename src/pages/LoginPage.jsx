@@ -77,11 +77,11 @@ const LoginPage = ({ onLogin }) => {
         {/* Logo */}
         <div style={{ textAlign: "center", marginBottom: 36 }}>
           <div style={{ fontFamily: T.head, fontSize: 30, fontWeight: 800, color: T.text, marginBottom: 6 }}>
-            ⚓ CargoDesk
+            🪁 Kalio
           </div>
           <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted,
             letterSpacing: ".14em", textTransform: "uppercase" }}>
-            Freight Management Platform
+            Integration Board &amp; Test Management
           </div>
         </div>
 
@@ -173,7 +173,7 @@ const LoginPage = ({ onLogin }) => {
 
         <div style={{ textAlign: "center", marginTop: 20,
           fontFamily: T.mono, fontSize: 10, color: T.border, letterSpacing: ".08em" }}>
-          v{VERSION} · CargoDesk
+          v{VERSION} · Kalio
         </div>
       </div>
     </div>

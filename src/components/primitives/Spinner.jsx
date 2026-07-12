@@ -44,14 +44,14 @@ const Spinner = ({ size = "md", color, label, style: extraStyle }) => {
 
 // ─── FullPageSpinner — centred overlay for initial app load ───────────────────
 
-export const FullPageSpinner = ({ label = "Loading CargoDesk…" }) => (
+export const FullPageSpinner = ({ label = "Loading Kalio…" }) => (
   <div style={{
     position: "fixed", inset: 0, background: T.bg,
     display: "flex", flexDirection: "column",
     alignItems: "center", justifyContent: "center", gap: 20, zIndex: 9999,
   }}>
     <div style={{ fontFamily: T.head, fontSize: 28, fontWeight: 800,
-      color: T.text, letterSpacing: "-.02em" }}>⚓ CargoDesk</div>
+      color: T.text, letterSpacing: "-.02em" }}>🪁 Kalio</div>
     <Spinner size="lg" />
     <span style={{ fontFamily: T.body, fontSize: 13, color: T.textMuted }}>
       {label}
