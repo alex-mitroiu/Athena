@@ -153,8 +153,9 @@ db.exec(`
         );
       }
 
+      const idPlaceholders = rows.map(() => "?").join(",");
       const linkRows = db.prepare(`
-        SELECT id FROM ticket_links WHERE from_id IN (${placeholders}) OR to_id IN (${placeholders})
+        SELECT id FROM ticket_links WHERE from_id IN (${idPlaceholders}) OR to_id IN (${idPlaceholders})
       `).all(...rows.map(r => r.id), ...rows.map(r => r.id));
       const deleteLink = db.prepare("DELETE FROM ticket_links WHERE id=?");
       for (const l of linkRows) deleteLink.run(l.id);
