@@ -40,7 +40,9 @@ db.exec(`
     roles         TEXT DEFAULT NULL,
     is_active     INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    last_login    TEXT
+    last_login    TEXT,
+    failed_attempts INTEGER NOT NULL DEFAULT 0,
+    locked_until    TEXT NOT NULL DEFAULT ''
   );
 
   CREATE TABLE IF NOT EXISTS tickets (
@@ -100,6 +102,15 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 `);
+
+// ─── Migrations ───────────────────────────────────────────────────────────────
+// Safe try/catch — each runs once; subsequent startups no-op on "duplicate column".
+for (const m of [
+  "ALTER TABLE users ADD COLUMN failed_attempts INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE users ADD COLUMN locked_until TEXT NOT NULL DEFAULT ''",
+]) {
+  try { db.exec(m); } catch {}
+}
 
 // ─── Auth middleware ───────────────────────────────────────────────────────────
 
@@ -196,18 +207,38 @@ require("./routes/kanban")(app, ctx);
 
 app.get("/api/health", (req, res) => ok(res, { status: "ok", version: require("./package.json").version }));
 
+const LOGIN_MAX_ATTEMPTS    = 5;
+const LOGIN_LOCKOUT_MINUTES = 30;
+
 app.post("/api/auth/login", (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return err(res, "Email and password required");
   const user = db.prepare("SELECT * FROM users WHERE email=? AND is_active=1").get(email.toLowerCase().trim());
-  if (!user || !bcrypt.compareSync(password, user.password_hash))
+  if (!user) return err(res, "Invalid email or password", 401);
+
+  const now = new Date().toISOString();
+  if (user.locked_until && user.locked_until > now) {
+    const mins = Math.ceil((new Date(user.locked_until) - Date.now()) / 60000);
+    return err(res, `Account locked. Try again in ${mins} minute${mins === 1 ? '' : 's'}.`, 423);
+  }
+
+  if (!bcrypt.compareSync(password, user.password_hash)) {
+    const attempts = (user.failed_attempts || 0) + 1;
+    if (attempts >= LOGIN_MAX_ATTEMPTS) {
+      const lockedUntil = new Date(Date.now() + LOGIN_LOCKOUT_MINUTES * 60_000).toISOString();
+      db.prepare("UPDATE users SET failed_attempts=?, locked_until=? WHERE id=?").run(attempts, lockedUntil, user.id);
+      return err(res, `Too many failed attempts. Account locked for ${LOGIN_LOCKOUT_MINUTES} minutes.`, 423);
+    }
+    db.prepare("UPDATE users SET failed_attempts=? WHERE id=?").run(attempts, user.id);
     return err(res, "Invalid email or password", 401);
+  }
+
+  db.prepare("UPDATE users SET failed_attempts=0, locked_until='', last_login=datetime('now') WHERE id=?").run(user.id);
   const roles = parseUserRoles(user);
   const token = jwt.sign(
     { id: user.id, email: user.email, name: user.name, role: user.role, roles },
     JWT_SECRET, { expiresIn: "8h" }
   );
-  db.prepare("UPDATE users SET last_login=datetime('now') WHERE id=?").run(user.id);
   ok(res, { token, user: { id: user.id, email: user.email, name: user.name, role: user.role, roles } });
 });
 
@@ -219,10 +250,12 @@ app.get("/api/auth/me", auth(), (req, res) => {
 
 app.post("/api/auth/logout", (req, res) => ok(res, { ok: true }));
 
+app.get("/api/auth/sso/config", (req, res) => ok(res, { enabled: false }));
+
 // ── Users ─────────────────────────────────────────────────────────────────────
 
 app.get("/api/users", requireRole(["admin"]), (req, res) => {
-  const rows = db.prepare("SELECT id, email, name, role, roles, is_active, created_at, last_login FROM users ORDER BY created_at").all();
+  const rows = db.prepare("SELECT id, email, name, role, roles, is_active, created_at, last_login, failed_attempts, locked_until FROM users ORDER BY created_at").all();
   ok(res, rows.map(r => ({ ...r, roles: parseUserRoles(r) })));
 });
 
@@ -242,7 +275,7 @@ app.post("/api/users", requireRole(["admin"]), (req, res) => {
 });
 
 app.patch("/api/users/:id", requireRole(["admin"]), (req, res) => {
-  const { name, roles, is_active, password } = req.body || {};
+  const { name, roles, is_active, password, unlock } = req.body || {};
   const user = db.prepare("SELECT * FROM users WHERE id=?").get(req.params.id);
   if (!user) return err(res, "User not found", 404);
   if (req.params.id === req.user.id && is_active === 0)
@@ -255,6 +288,7 @@ app.patch("/api/users/:id", requireRole(["admin"]), (req, res) => {
   }
   if (is_active !== undefined) { sets.push("is_active=?");     vals.push(is_active ? 1 : 0); }
   if (password)                { sets.push("password_hash=?"); vals.push(bcrypt.hashSync(password, 10)); }
+  if (unlock)                  { sets.push("failed_attempts=0", "locked_until=''"); }
   if (!sets.length) return err(res, "Nothing to update");
   vals.push(req.params.id);
   db.prepare(`UPDATE users SET ${sets.join(",")} WHERE id=?`).run(...vals);

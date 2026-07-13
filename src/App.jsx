@@ -4,6 +4,7 @@ import { toast } from "./toast";
 import ToastContainer from "./components/primitives/ToastContainer";
 import { api, TOKEN_KEY } from "./api";
 import { AuthContext } from "./AuthContext";
+import { VERSION, CODENAME } from "./version";
 
 import LoginPage      from "./pages/LoginPage";
 import KanbanPage     from "./pages/KanbanPage";
@@ -11,6 +12,7 @@ import ReleasesPage   from "./pages/ReleasesPage";
 import TestPlansPage  from "./pages/TestPlansPage";
 import TestRunsPage   from "./pages/TestRunsPage";
 import TestCasesPage  from "./pages/TestCasesPage";
+import UsersPage      from "./pages/UsersPage";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
@@ -45,6 +47,8 @@ export default function App() {
   const [token,     setToken]     = useState(() => localStorage.getItem(TOKEN_KEY));
   const [user,      setUser]      = useState(null);
   const [page,      setPage]      = useState("kanban");
+  const [unreachable, setUnreachable] = useState(false);
+  const [retryTick,   setRetryTick]   = useState(0);
   const [isDark,    setIsDark]    = useState(() => {
     const saved = localStorage.getItem(THEME_KEY);
     return saved !== null ? saved === "dark" : true;
@@ -56,13 +60,23 @@ export default function App() {
     localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
   }, [isDark]);
 
-  // Restore session on mount
+  // Restore session on mount (and on manual/auto retry). A genuinely invalid
+  // session (401 → "Unauthorised") clears the token via the logout event below;
+  // any other failure means the server itself is unreachable — keep the token
+  // so a valid session survives a transient outage instead of forcing re-login.
   useEffect(() => {
     if (!token) return;
     api.auth.me()
-      .then(u => setUser(u))
-      .catch(() => { localStorage.removeItem(TOKEN_KEY); setToken(null); });
-  }, [token]);
+      .then(u => { setUser(u); setUnreachable(false); })
+      .catch(e => setUnreachable(e.message !== "Unauthorised"));
+  }, [token, retryTick]);
+
+  // While the server is unreachable, poll every 5s until it comes back
+  useEffect(() => {
+    if (!unreachable) return;
+    const id = setInterval(() => setRetryTick(t => t + 1), 5000);
+    return () => clearInterval(id);
+  }, [unreachable]);
 
   // Global logout event (401)
   useEffect(() => {
@@ -82,6 +96,7 @@ export default function App() {
     localStorage.removeItem(TOKEN_KEY);
     setToken(null);
     setUser(null);
+    setUnreachable(false);
     setPage("kanban");
     api.auth.logout().catch(() => {});
   }, []);
@@ -101,6 +116,34 @@ export default function App() {
     activeOffice: null, userOffices: [], allOffices: true,
     setActiveOffice: () => {},
   };
+
+  // Have a token but can't reach the server — keep the session, show a
+  // reconnect state instead of silently sitting there or forcing a re-login.
+  if (token && unreachable) {
+    return (
+      <AuthContext.Provider value={authCtx}>
+        <div style={{ minHeight: "100vh", background: T.bg, color: T.text,
+          display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+          <div style={{ textAlign: "center", maxWidth: 360 }}>
+            <div style={{ fontSize: 30, marginBottom: 14 }}>🦉</div>
+            <div style={{ fontFamily: T.head, fontSize: 16, fontWeight: 700, marginBottom: 8 }}>
+              Can't reach the server
+            </div>
+            <div style={{ fontFamily: T.body, fontSize: 13, color: T.textMuted, marginBottom: 18, lineHeight: 1.5 }}>
+              Your session is still saved — retrying automatically every few seconds.
+            </div>
+            <button onClick={() => setRetryTick(t => t + 1)} style={{
+              padding: "8px 18px", borderRadius: 7, border: `1px solid ${T.border}`,
+              background: "transparent", color: T.text, cursor: "pointer",
+              fontFamily: T.body, fontSize: 13 }}>
+              Retry now
+            </button>
+          </div>
+          <ToastContainer />
+        </div>
+      </AuthContext.Provider>
+    );
+  }
 
   // Not logged in → show login
   if (!token || !user) {
@@ -139,7 +182,7 @@ export default function App() {
             <span style={{ fontSize: 22 }}>🦉</span>
             <div>
               <div style={{ fontFamily: T.head, fontSize: 15, fontWeight: 800, color: T.text }}>Athena</div>
-              <div style={{ fontFamily: T.mono, fontSize: 9, color: T.textMuted, letterSpacing: ".05em" }}>v0.1.0 · Genesis</div>
+              <div style={{ fontFamily: T.mono, fontSize: 9, color: T.textMuted, letterSpacing: ".05em" }}>v{VERSION} · {CODENAME}</div>
             </div>
           </div>
 
@@ -151,6 +194,8 @@ export default function App() {
             {nb("test-plans", "🧪", "Test Plans", true)}
             {nb("test-runs",  "🔄", "Test Runs", true)}
             {nb("test-cases", "✓",  "Test Cases", true)}
+            {isAdmin && <NavSection label="Admin" />}
+            {isAdmin && nb("users", "👤", "Users")}
           </nav>
 
           {/* Footer */}
@@ -198,6 +243,7 @@ export default function App() {
           {page === "test-plans" && <TestPlansPage />}
           {page === "test-runs"  && <TestRunsPage />}
           {page === "test-cases" && <TestCasesPage />}
+          {page === "users" && isAdmin && <UsersPage />}
         </main>
 
       </div>

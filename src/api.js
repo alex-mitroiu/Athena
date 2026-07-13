@@ -28,9 +28,10 @@ export { TOKEN_KEY };
 
 export const api = {
   auth: {
-    login:  (email, password) => req("POST", "/auth/login", { email, password }),
-    me:     ()                => req("GET",  "/auth/me"),
-    logout: ()                => req("POST", "/auth/logout"),
+    login:     (email, password) => req("POST", "/auth/login", { email, password }),
+    me:        ()                => req("GET",  "/auth/me"),
+    logout:    ()                => req("POST", "/auth/logout"),
+    ssoConfig: ()                => req("GET",  "/auth/sso/config"),
   },
 
   users: {
