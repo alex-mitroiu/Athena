@@ -14,7 +14,7 @@ import TestCasesPage  from "./pages/TestCasesPage";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
-const THEME_KEY = "kalio_theme";
+const THEME_KEY = "athena_theme";
 
 // ─── Nav button ───────────────────────────────────────────────────────────────
 
@@ -67,8 +67,8 @@ export default function App() {
   // Global logout event (401)
   useEffect(() => {
     const handler = () => handleLogout();
-    window.addEventListener("kalio:logout", handler);
-    return () => window.removeEventListener("kalio:logout", handler);
+    window.addEventListener("athena:logout", handler);
+    return () => window.removeEventListener("athena:logout", handler);
   }, []);
 
   const handleLogin = useCallback((tok, usr) => {
@@ -136,9 +136,9 @@ export default function App() {
           {/* Logo */}
           <div style={{ padding: "16px 16px 12px", display: "flex", alignItems: "center", gap: 10,
             borderBottom: `1px solid ${T.border}` }}>
-            <span style={{ fontSize: 22 }}>🪁</span>
+            <span style={{ fontSize: 22 }}>🦉</span>
             <div>
-              <div style={{ fontFamily: T.head, fontSize: 15, fontWeight: 800, color: T.text }}>Kalio</div>
+              <div style={{ fontFamily: T.head, fontSize: 15, fontWeight: 800, color: T.text }}>Athena</div>
               <div style={{ fontFamily: T.mono, fontSize: 9, color: T.textMuted, letterSpacing: ".05em" }}>v0.1.0 · Genesis</div>
             </div>
           </div>

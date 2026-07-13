@@ -1,4 +1,4 @@
-const TOKEN_KEY = "kalio_token";
+const TOKEN_KEY = "athena_token";
 
 const getToken = () => localStorage.getItem(TOKEN_KEY);
 
@@ -14,7 +14,7 @@ async function req(method, path, body) {
   };
   const res = await fetch(`/api${path}`, opts);
   if (res.status === 401) {
-    window.dispatchEvent(new Event("kalio:logout"));
+    window.dispatchEvent(new Event("athena:logout"));
     throw new Error("Unauthorised");
   }
   if (!res.ok) {

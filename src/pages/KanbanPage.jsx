@@ -3397,7 +3397,7 @@ const KanbanPage = () => {
   const [testOutcomePending, setTestOutcomePending] = useState(null);
 
   const [wipLimits, setWipLimits] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("kalio_wip_limits") || "{}"); }
+    try { return JSON.parse(localStorage.getItem("athena_wip_limits") || "{}"); }
     catch { return {}; }
   });
 
@@ -3405,7 +3405,7 @@ const KanbanPage = () => {
     setWipLimits(prev => {
       const next = { ...prev };
       if (limit == null) delete next[col]; else next[col] = limit;
-      localStorage.setItem("kalio_wip_limits", JSON.stringify(next));
+      localStorage.setItem("athena_wip_limits", JSON.stringify(next));
       return next;
     });
   };

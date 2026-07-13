@@ -1,10 +1,10 @@
-# 🪁 Kalio
+# 🦉 Athena
 
 **v0.1.0 · Genesis**
 
-Kalio is a standalone integration board and test management tool. It combines a multi-project Kanban board with structured test management — test plans, test runs, test cases, and release versioning — in a single lightweight app.
+Athena is a standalone integration board and test management tool. It combines a multi-project Kanban board with structured test management — test plans, test runs, test cases, and release versioning — in a single lightweight app.
 
-Extracted and extended from [CargoDesk](https://github.com/alex-mitroiu/CargoDesk).
+Named after the Greek goddess of wisdom and strategy.
 
 ---
 
@@ -43,8 +43,8 @@ Extracted and extended from [CargoDesk](https://github.com/alex-mitroiu/CargoDes
 ### Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/kalio.git
-cd kalio
+git clone https://github.com/YOUR_USERNAME/athena.git
+cd athena
 npm install
 ```
 
@@ -60,7 +60,7 @@ npm run dev
 ### Default admin credentials
 
 ```
-Email:    admin@kalio.local
+Email:    admin@athena.local
 Password: admin123
 ```
 

@@ -6,8 +6,11 @@ dist/
 dist-ssr/
 
 # SQLite database files
+athena.db
 *.db
+athena.db
 *.db-shm
+athena.db
 *.db-wal
 
 # Environment / secrets

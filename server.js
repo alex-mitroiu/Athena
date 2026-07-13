@@ -8,13 +8,13 @@ const bcrypt = require("bcryptjs");
 const jwt    = require("jsonwebtoken");
 
 const PORT       = process.env.PORT       || 3001;
-const JWT_SECRET = process.env.JWT_SECRET || "kalio-dev-secret-do-not-use-in-prod";
+const JWT_SECRET = process.env.JWT_SECRET || "athena-dev-secret-do-not-use-in-prod";
 if (!process.env.JWT_SECRET)
   console.warn("⚠  JWT_SECRET not set — using insecure dev default. Set it before deploying.");
 
 const app    = express();
 const server = http.createServer(app);
-const db     = new DatabaseSync(path.join(__dirname, "kalio.db"));
+const db     = new DatabaseSync(path.join(__dirname, "athena.db"));
 
 app.use(express.json({ limit: "10mb" }));
 
@@ -300,8 +300,8 @@ if (userCount === 0) {
   const adminId = `USR-${uid()}`;
   db.prepare(
     "INSERT INTO users (id,email,name,password_hash,role,roles,is_active) VALUES (?,?,?,?,?,?,1)"
-  ).run(adminId, "admin@kalio.local", "Admin", bcrypt.hashSync("admin123", 10), "admin", JSON.stringify(["admin"]));
-  console.log("  ✔ Default admin created: admin@kalio.local / admin123");
+  ).run(adminId, "admin@athena.local", "Admin", bcrypt.hashSync("admin123", 10), "admin", JSON.stringify(["admin"]));
+  console.log("  ✔ Default admin created: admin@athena.local / admin123");
   console.log("  ⚠  Change this password immediately after first login.");
 
   // Seed default project
@@ -328,5 +328,5 @@ if (userCount === 0) {
 // ─── Start ────────────────────────────────────────────────────────────────────
 
 server.listen(PORT, () =>
-  console.log(`\n  Kalio v${require("./package.json").version} running on http://localhost:${PORT}\n`)
+  console.log(`\n  Athena v${require("./package.json").version} running on http://localhost:${PORT}\n`)
 );
