@@ -4,7 +4,7 @@ import { toast } from "./toast";
 import ToastContainer from "./components/primitives/ToastContainer";
 import { api, TOKEN_KEY } from "./api";
 import { AuthContext } from "./AuthContext";
-import { VERSION, CODENAME } from "./version";
+import { VERSION, CODENAME, COPYRIGHT_YEAR, COPYRIGHT_OWNER } from "./version";
 
 import LoginPage      from "./pages/LoginPage";
 import KanbanPage     from "./pages/KanbanPage";
@@ -13,6 +13,7 @@ import TestPlansPage  from "./pages/TestPlansPage";
 import TestRunsPage   from "./pages/TestRunsPage";
 import TestCasesPage  from "./pages/TestCasesPage";
 import UsersPage      from "./pages/UsersPage";
+import UserManualPage from "./pages/UserManualPage";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
@@ -170,7 +171,8 @@ export default function App() {
 
   return (
     <AuthContext.Provider value={authCtx}>
-      <div style={{ display: "flex", height: "100vh", background: T.bg, color: T.text, overflow: "hidden" }}>
+      <div style={{ display: "flex", flexDirection: "column", height: "100vh", background: T.bg, color: T.text, overflow: "hidden" }}>
+      <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden" }}>
 
         {/* ── Sidebar ── */}
         <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column",
@@ -237,15 +239,36 @@ export default function App() {
         </div>
 
         {/* ── Main ── */}
-        <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {page === "kanban"     && <KanbanPage />}
-          {page === "releases"   && <ReleasesPage />}
-          {page === "test-plans" && <TestPlansPage />}
-          {page === "test-runs"  && <TestRunsPage />}
-          {page === "test-cases" && <TestCasesPage />}
-          {page === "users" && isAdmin && <UsersPage />}
+        <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "0 20px" }}>
+          {page === "kanban"       && <KanbanPage />}
+          {page === "releases"     && <ReleasesPage />}
+          {page === "test-plans"   && <TestPlansPage />}
+          {page === "test-runs"    && <TestRunsPage />}
+          {page === "test-cases"   && <TestCasesPage />}
+          {page === "users"        && isAdmin && <UsersPage />}
+          {page === "user-manual"  && <UserManualPage />}
         </main>
 
+      </div>
+
+      {/* ── Footer ── */}
+      <footer style={{
+        flexShrink: 0, borderTop: `1px solid ${T.border}`,
+        padding: "7px 20px", display: "flex", alignItems: "center", justifyContent: "space-between",
+        background: T.bg,
+      }}>
+        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.textMuted }}>
+          🦉 Athena · v{VERSION}
+        </span>
+        <span style={{ fontFamily: T.body, fontSize: 11, color: T.textMuted }}>
+          © {COPYRIGHT_YEAR} {COPYRIGHT_OWNER}
+        </span>
+        <button type="button" onClick={() => setPage("user-manual")}
+          style={{ background: "none", border: "none", cursor: "pointer", padding: 0,
+            fontFamily: T.body, fontSize: 11, color: T.textMuted, textDecoration: "underline dotted" }}>
+          User Manual
+        </button>
+      </footer>
       </div>
       <ToastContainer />
     </AuthContext.Provider>
