@@ -980,6 +980,385 @@ const TestedByPanel = ({ ticketId, testItems = [] }) => {
   );
 };
 
+// ─── Ticket Comments Panel ────────────────────────────────────────────────────
+
+const TicketCommentsPanel = ({ ticketId }) => {
+  const { user, canEdit, isAdmin } = useAuth();
+  const [comments, setComments] = useState(null); // null = loading
+  const [body,     setBody]     = useState("");
+  const [posting,  setPosting]  = useState(false);
+
+  const load = () => api.tickets.comments(ticketId).then(setComments).catch(() => setComments([]));
+  useEffect(() => { load(); }, [ticketId]);
+
+  const handlePost = async () => {
+    if (!body.trim()) return;
+    setPosting(true);
+    try {
+      await api.tickets.addComment(ticketId, { body: body.trim() });
+      setBody("");
+      await load();
+    } catch (e) { toast.error(e.message); }
+    setPosting(false);
+  };
+
+  const handleRemove = async id => {
+    try {
+      await api.tickets.removeComment(ticketId, id);
+      setComments(cs => cs.filter(c => c.id !== id));
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const sectionLbl = { fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+    textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 };
+  const fmtTime = iso => new Date(iso).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+
+  return (
+    <div>
+      <div style={sectionLbl}>Comments{comments?.length ? ` (${comments.length})` : ""}</div>
+
+      {comments === null && (
+        <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>
+          Loading comments…
+        </div>
+      )}
+
+      {comments !== null && comments.length === 0 && (
+        <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic", marginBottom: 8 }}>
+          No comments yet.
+        </div>
+      )}
+
+      {comments !== null && comments.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 10 }}>
+          {comments.map(c => (
+            <div key={c.id} style={{ padding: "8px 10px", borderRadius: 7,
+              background: T.bg, border: `1px solid ${T.border}` }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ fontFamily: T.body, fontSize: 12, fontWeight: 700, color: T.text }}>
+                    {c.authorName || "Unknown"}
+                  </span>
+                  <span style={{ fontFamily: T.body, fontSize: 10.5, color: T.textMuted }}>
+                    {fmtTime(c.createdAt)}
+                  </span>
+                </div>
+                {canEdit && (c.authorId === user?.id || isAdmin) && (
+                  <button onClick={() => handleRemove(c.id)} title="Delete comment"
+                    style={{ background: "none", border: "none", cursor: "pointer",
+                      color: T.textMuted, fontSize: 14, lineHeight: 1, padding: "0 2px", flexShrink: 0,
+                      transition: "color .12s" }}
+                    onMouseEnter={e => e.currentTarget.style.color = T.danger}
+                    onMouseLeave={e => e.currentTarget.style.color = T.textMuted}>
+                    ×
+                  </button>
+                )}
+              </div>
+              <div style={{ fontFamily: T.body, fontSize: 12.5, color: T.text, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
+                {c.body}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {canEdit && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <Textarea value={body} onChange={setBody} placeholder="Write a comment…" rows={2} />
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Btn size="sm" disabled={!body.trim() || posting} onClick={handlePost}>
+              {posting ? "Posting…" : "Post"}
+            </Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// ─── Ticket Attachments Panel ─────────────────────────────────────────────────
+
+const TicketAttachmentsPanel = ({ ticketId }) => {
+  const { canEdit } = useAuth();
+  const [attachments, setAttachments] = useState(null); // null = loading
+  const [uploading,   setUploading]   = useState(false);
+  const fileRef = useRef(null);
+
+  const load = () => api.tickets.attachments(ticketId).then(setAttachments).catch(() => setAttachments([]));
+  useEffect(() => { load(); }, [ticketId]);
+
+  const handleFileChange = e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploading(true);
+    const reader = new FileReader();
+    reader.onload = async ev => {
+      const base64 = ev.target.result.split(",")[1];
+      try {
+        await api.tickets.addAttachment(ticketId, { filename: file.name, mimeType: file.type, data: base64 });
+        await load();
+      } catch (err) { toast.error(err.message); }
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = "";
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleDownload = a => {
+    api.tickets.downloadAttachment(a.id, a.filename).catch(err => toast.error(err.message));
+  };
+
+  const handleRemove = async id => {
+    try {
+      await api.tickets.removeAttachment(id);
+      setAttachments(list => list.filter(a => a.id !== id));
+    } catch (err) { toast.error(err.message); }
+  };
+
+  const fmtSize = bytes => {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  };
+
+  const sectionLbl = { fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+    textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 };
+
+  return (
+    <div>
+      <div style={sectionLbl}>Attachments{attachments?.length ? ` (${attachments.length})` : ""}</div>
+
+      {attachments === null && (
+        <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>
+          Loading attachments…
+        </div>
+      )}
+
+      {attachments !== null && attachments.length === 0 && (
+        <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic", marginBottom: 8 }}>
+          No attachments yet.
+        </div>
+      )}
+
+      {attachments !== null && attachments.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 8 }}>
+          {attachments.map(a => (
+            <div key={a.id} style={{ display: "flex", alignItems: "center", gap: 8,
+              padding: "6px 10px", borderRadius: 6, background: T.bg, border: `1px solid ${T.border}` }}>
+              <span onClick={() => handleDownload(a)} title="Download"
+                style={{ fontFamily: T.body, fontSize: 12, color: T.accent, flex: 1, cursor: "pointer",
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                📎 {a.filename}
+              </span>
+              <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted, flexShrink: 0 }}>
+                {fmtSize(a.sizeBytes)}
+              </span>
+              {canEdit && (
+                <button onClick={() => handleRemove(a.id)} title="Delete attachment"
+                  style={{ background: "none", border: "none", cursor: "pointer",
+                    color: T.textMuted, fontSize: 14, lineHeight: 1, padding: "0 2px", flexShrink: 0,
+                    transition: "color .12s" }}
+                  onMouseEnter={e => e.currentTarget.style.color = T.danger}
+                  onMouseLeave={e => e.currentTarget.style.color = T.textMuted}>
+                  ×
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {canEdit && (
+        <>
+          <input ref={fileRef} type="file" onChange={handleFileChange} style={{ display: "none" }} />
+          <button type="button" onClick={() => fileRef.current?.click()} disabled={uploading}
+            style={{ fontFamily: T.body, fontSize: 12, color: T.accent, background: "none",
+              border: `1px dashed ${T.accent}55`, borderRadius: 6, padding: "5px 12px",
+              cursor: uploading ? "default" : "pointer", width: "100%", textAlign: "left",
+              opacity: uploading ? 0.6 : 1 }}>
+            {uploading ? "Uploading…" : "＋ Attach file"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+};
+
+// ─── Ticket Labels Panel ──────────────────────────────────────────────────────
+
+// ─── Custom Fields Editor ─────────────────────────────────────────────────────
+// Free-form key/value pairs stored as JSON on the ticket — no admin-defined schema (v1).
+
+const CustomFieldsEditor = ({ value = {}, onChange }) => {
+  const [newKey, setNewKey] = useState("");
+  const [newVal, setNewVal] = useState("");
+  const entries = Object.entries(value);
+
+  const addField = () => {
+    const key = newKey.trim();
+    if (!key || Object.prototype.hasOwnProperty.call(value, key)) return;
+    onChange({ ...value, [key]: newVal });
+    setNewKey(""); setNewVal("");
+  };
+  const updateField = (key, v) => onChange({ ...value, [key]: v });
+  const removeField = key => {
+    const next = { ...value };
+    delete next[key];
+    onChange(next);
+  };
+
+  const sectionLbl = { fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+    textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 };
+  const inp = { fontFamily: T.body, fontSize: 12, color: T.text, background: T.bg,
+    border: `1px solid ${T.border}`, borderRadius: 7, padding: "6px 10px",
+    outline: "none", width: "100%", boxSizing: "border-box" };
+
+  return (
+    <div>
+      <div style={sectionLbl}>Custom Fields</div>
+      {entries.length === 0 && (
+        <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic", marginBottom: 8 }}>
+          No custom fields.
+        </div>
+      )}
+      {entries.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 8 }}>
+          {entries.map(([k, v]) => (
+            <div key={k} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 600, color: T.accent,
+                background: `${T.accent}14`, border: `1px solid ${T.accent}44`, borderRadius: 5,
+                padding: "5px 8px", flexShrink: 0, maxWidth: 120, overflow: "hidden",
+                textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={k}>
+                {k}
+              </span>
+              <input value={v} onChange={e => updateField(k, e.target.value)} style={{ ...inp, flex: 1 }} />
+              <button type="button" onClick={() => removeField(k)} title="Remove field"
+                style={{ background: "none", border: "none", cursor: "pointer",
+                  color: T.textMuted, fontSize: 14, lineHeight: 1, padding: "0 2px", flexShrink: 0 }}
+                onMouseEnter={e => e.currentTarget.style.color = T.danger}
+                onMouseLeave={e => e.currentTarget.style.color = T.textMuted}>
+                ×
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6 }}>
+        <input value={newKey} onChange={e => setNewKey(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && addField()}
+          placeholder="Field name" style={{ ...inp, flex: 1 }} />
+        <input value={newVal} onChange={e => setNewVal(e.target.value)}
+          onKeyDown={e => e.key === "Enter" && addField()}
+          placeholder="Value" style={{ ...inp, flex: 1 }} />
+        <Btn size="sm" disabled={!newKey.trim()} onClick={addField}>Add</Btn>
+      </div>
+    </div>
+  );
+};
+
+const TicketLabelsPanel = ({ ticketId, onChange }) => {
+  const { canEdit } = useAuth();
+  const [labels,    setLabels]    = useState(null); // null = loading
+  const [allLabels, setAllLabels] = useState([]);
+  const [adding,    setAdding]    = useState(false);
+  const [input,     setInput]     = useState("");
+
+  const load = () => api.tickets.labels(ticketId).then(setLabels).catch(() => setLabels([]));
+  useEffect(() => { load(); }, [ticketId]);
+  useEffect(() => { api.labels.list().then(setAllLabels).catch(() => {}); }, []);
+
+  const suggestions = input.trim().length > 0
+    ? allLabels.filter(l =>
+        l.toLowerCase().includes(input.toLowerCase()) &&
+        !(labels || []).some(x => x.label.toLowerCase() === l.toLowerCase())
+      ).slice(0, 6)
+    : [];
+
+  const handleAdd = async value => {
+    const label = (value ?? input).trim();
+    if (!label) return;
+    try {
+      await api.tickets.addLabel(ticketId, label);
+      setInput(""); setAdding(false);
+      await load();
+      onChange?.();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const handleRemove = async labelId => {
+    try {
+      await api.tickets.removeLabel(labelId);
+      setLabels(ls => ls.filter(l => l.id !== labelId));
+      onChange?.();
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const sectionLbl = { fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+    textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 };
+  const inp = { fontFamily: T.body, fontSize: 12, color: T.text, background: T.bg,
+    border: `1px solid ${T.border}`, borderRadius: 7, padding: "6px 10px",
+    outline: "none", width: "100%", boxSizing: "border-box" };
+
+  return (
+    <div>
+      <div style={sectionLbl}>Labels</div>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+        {(labels || []).map(l => (
+          <span key={l.id} style={{ display: "inline-flex", alignItems: "center", gap: 5,
+            fontFamily: T.body, fontSize: 11, fontWeight: 600, color: T.accent,
+            background: `${T.accent}14`, border: `1px solid ${T.accent}44`,
+            borderRadius: 20, padding: "3px 6px 3px 10px" }}>
+            {l.label}
+            {canEdit && (
+              <button type="button" onClick={() => handleRemove(l.id)} title="Remove label"
+                style={{ background: "none", border: "none", cursor: "pointer",
+                  color: T.accent, fontSize: 13, lineHeight: 1, padding: 0 }}>
+                ×
+              </button>
+            )}
+          </span>
+        ))}
+        {canEdit && !adding && (
+          <button type="button" onClick={() => setAdding(true)}
+            style={{ fontFamily: T.body, fontSize: 11, color: T.textMuted, background: "none",
+              border: `1px dashed ${T.border}`, borderRadius: 20, padding: "3px 10px", cursor: "pointer" }}>
+            ＋ Label
+          </button>
+        )}
+        {labels !== null && labels.length === 0 && !canEdit && (
+          <span style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>
+            No labels.
+          </span>
+        )}
+      </div>
+      {adding && (
+        <div style={{ position: "relative", marginTop: 8 }}>
+          <input value={input} autoFocus
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={e => {
+              if (e.key === "Enter") { e.preventDefault(); handleAdd(); }
+              if (e.key === "Escape") { setAdding(false); setInput(""); }
+            }}
+            onBlur={() => setTimeout(() => { setAdding(false); setInput(""); }, 150)}
+            placeholder="Type a label, press Enter…" style={inp} />
+          {suggestions.length > 0 && (
+            <div style={{ border: `1px solid ${T.border}`, borderRadius: 7, overflow: "hidden", marginTop: 4 }}>
+              {suggestions.map(s => (
+                <div key={s} onMouseDown={() => handleAdd(s)}
+                  style={{ padding: "6px 10px", cursor: "pointer", fontFamily: T.body, fontSize: 12, color: T.text }}
+                  onMouseEnter={e => e.currentTarget.style.background = T.surfaceHover}
+                  onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                  {s}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // ─── Parent Picker Modal ──────────────────────────────────────────────────────
 // Full-screen picker for selecting a parent Epic or Story.
 // Supports free-text search across title + ID, and one-click type filtering.
@@ -1107,7 +1486,7 @@ const ParentPickerModal = ({ tickets = [], excludeId, onSelect, onClose, allowed
 
 // ─── Ticket Modal ─────────────────────────────────────────────────────────────
 
-const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], versions = [], columns = COLUMNS, onSave, onCancel }) => {
+const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], versions = [], columns = COLUMNS, onSave, onCancel, onLabelsChanged }) => {
   const isEdit = !!init.id;
   const [f, setF] = useState({
     title:       init.title       || "",
@@ -1122,6 +1501,8 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], vers
     dueDate:     init.dueDate     || "",
     parentId:    init.parentId    || "",
     testNotes:   init.testNotes   || "",
+    storyPoints: init.storyPoints ?? "",
+    customFields: init.customFields || {},
   });
   const [showParentPicker, setShowParentPicker] = useState(false);
   const set = k => v => setF(p => ({ ...p, [k]: v }));
@@ -1144,8 +1525,8 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], vers
           options={PRIORITIES.map(p => ({ value: p, label: p }))} />
       </div>
 
-      {/* Assignee + Due date on one row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+      {/* Assignee + Due date + Story points on one row */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 90px", gap: 12 }}>
         <Sel label="Assignee" value={f.assigneeId} onChange={set("assigneeId")}
           options={[
             { value: "", label: "— Unassigned —" },
@@ -1160,7 +1541,12 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], vers
             style={{ ...inputBase, fontFamily: T.mono, fontSize: 13, cursor: "pointer",
               colorScheme: "dark" }} />
         </div>
+        <Inp label="Points" type="number" value={f.storyPoints}
+          onChange={v => set("storyPoints")(v === "" ? "" : v.replace(/[^0-9]/g, ""))}
+          placeholder="—" />
       </div>
+
+      <CustomFieldsEditor value={f.customFields} onChange={set("customFields")} />
 
       {/* Parent — lookup button opens ParentPickerModal */}
       {f.type !== "Epic" && (
@@ -1234,6 +1620,8 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], vers
       <Textarea label="Description" value={f.description} onChange={set("description")}
         placeholder="What needs to be done, acceptance criteria, notes…" rows={4} />
 
+      {isEdit && <TicketLabelsPanel ticketId={init.id} onChange={onLabelsChanged} />}
+
       {isEdit && (
         <Sel label="Status" value={f.status} onChange={set("status")}
           options={columns.map(c => ({ value: c, label: c }))} />
@@ -1246,6 +1634,16 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], vers
       {isEdit && f.type === "Story" && (
         <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14 }}>
           <TestedByPanel ticketId={init.id} testItems={testItems} />
+        </div>
+      )}
+      {isEdit && (
+        <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14 }}>
+          <TicketAttachmentsPanel ticketId={init.id} />
+        </div>
+      )}
+      {isEdit && (
+        <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14 }}>
+          <TicketCommentsPanel ticketId={init.id} />
         </div>
       )}
 
@@ -1422,7 +1820,8 @@ const DropLine = () => (
 const TicketCard = ({ ticket, onEdit, onDelete, onMove, onPreview, onDiagram, onCoverage, colIndex,
                       isSelected, isDragging, dropIndicator,
                       onDragStart, onDragEnd, onDragOver,
-                      allTickets = [], columns = COLUMNS }) => {
+                      allTickets = [], columns = COLUMNS,
+                      bulkMode = false, bulkSelected = false, onToggleBulkSelect }) => {
   const { canEdit } = useAuth();
   const [confirm, setConfirm] = useState(false);
   const cardRef  = useRef(null);
@@ -1458,7 +1857,11 @@ const TicketCard = ({ ticket, onEdit, onDelete, onMove, onPreview, onDiagram, on
         onDragStart={canEdit ? (e => { dragged.current = true; e.dataTransfer.setData("ticketId", ticket.id); onDragStart(ticket.id); }) : undefined}
         onDragEnd={canEdit ? (e => { dragged.current = false; onDragEnd(e); }) : undefined}
         onDragOver={canEdit ? handleDragOver : undefined}
-        onClick={() => { if (!dragged.current) onPreview(ticket); }}
+        onClick={() => {
+          if (dragged.current) return;
+          if (bulkMode) { onToggleBulkSelect(ticket.id); return; }
+          onPreview(ticket);
+        }}
         style={{
           background: isSelected ? `${T.accent}0d` : T.bg,
           border: `1px solid ${isSelected ? T.accent + "66" : T.border}`,
@@ -1485,6 +1888,12 @@ const TicketCard = ({ ticket, onEdit, onDelete, onMove, onPreview, onDiagram, on
 
         {/* Header */}
         <div style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 8 }}>
+          {bulkMode && (
+            <input type="checkbox" checked={bulkSelected}
+              onClick={e => e.stopPropagation()}
+              onChange={() => onToggleBulkSelect(ticket.id)}
+              style={{ marginTop: 3, cursor: "pointer", flexShrink: 0 }} />
+          )}
           <div style={{ flex: 1 }}>
             <div style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: T.text, lineHeight: 1.4 }}>
               {ticket.title}
@@ -1540,6 +1949,13 @@ const TicketCard = ({ ticket, onEdit, onDelete, onMove, onPreview, onDiagram, on
             <Badge variant={TYPE_VARIANT[ticket.type] || "default"}>{ticket.type}</Badge>
           )}
           <Badge variant={PRIORITY_VARIANT[ticket.priority] || "default"}>{ticket.priority}</Badge>
+          {ticket.storyPoints != null && (
+            <span title="Story points" style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700,
+              color: T.text, background: T.surface, border: `1px solid ${T.border}`,
+              borderRadius: 4, padding: "1px 6px", minWidth: 14, textAlign: "center" }}>
+              {ticket.storyPoints} SP
+            </span>
+          )}
           {ticket.section && (
             <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted,
               background: T.surface, border: `1px solid ${T.border}`, borderRadius: 4, padding: "1px 6px" }}>
@@ -1553,6 +1969,12 @@ const TicketCard = ({ ticket, onEdit, onDelete, onMove, onPreview, onDiagram, on
               v{ticket.version}
             </span>
           )}
+          {(ticket.labels || []).map(l => (
+            <span key={l} style={{ fontFamily: T.body, fontSize: 10, fontWeight: 600, color: T.accent,
+              background: `${T.accent}14`, border: `1px solid ${T.accent}44`, borderRadius: 10, padding: "1px 7px" }}>
+              {l}
+            </span>
+          ))}
         </div>
 
         {/* Description preview */}
@@ -1636,10 +2058,10 @@ const TicketCard = ({ ticket, onEdit, onDelete, onMove, onPreview, onDiagram, on
 
 // ─── Ticket Preview Panel ─────────────────────────────────────────────────────
 
-const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClose, onEdit, onMove, onDelete, onPreview, onDiagram, onCoverage, columns = COLUMNS }) => {
+const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClose, onEdit, onMove, onDelete, onPreview, onDiagram, onCoverage, columns = COLUMNS, onLabelsChanged }) => {
   const { canEdit } = useAuth();
   const [confirm,    setConfirm]    = useState(false);
-  const [tab,        setTab]        = useState("overview"); // "overview" | "links" | "order"
+  const [tab,        setTab]        = useState("overview"); // "overview" | "links" | "order" | "comments" | "files"
   const [links,      setLinks]      = useState(null);       // null = not yet fetched
   const [childLinks, setChildLinks] = useState(null);       // per-child link map
 
@@ -1746,6 +2168,12 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClo
         )}
         {metaRow("Type", <Badge variant={TYPE_VARIANT[ticket.type] || "default"}>{ticket.type}</Badge>)}
         {metaRow("Priority", <Badge variant={PRIORITY_VARIANT[ticket.priority] || "default"}>{ticket.priority}</Badge>)}
+        {ticket.storyPoints != null && metaRow("Story Points",
+          <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 700, color: T.text,
+            background: T.surface, border: `1px solid ${T.border}`, borderRadius: 4, padding: "2px 8px" }}>
+            {ticket.storyPoints}
+          </span>
+        )}
         {ticket.section && metaRow("Section",
           <span style={{ fontFamily: T.mono, fontSize: 12, color: T.text }}>{ticket.section}</span>
         )}
@@ -1783,7 +2211,12 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClo
             {ticket.testNotes}
           </span>
         )}
+        {Object.entries(ticket.customFields || {}).map(([k, v]) => metaRow(k,
+          <span key={k} style={{ fontFamily: T.body, fontSize: 12, color: T.text }}>{v}</span>
+        ))}
       </div>
+
+      <TicketLabelsPanel ticketId={ticket.id} onChange={onLabelsChanged} />
 
       <div>
         <div style={{ fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
@@ -2164,6 +2597,8 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClo
         {tabBtn("overview", "Overview")}
         {tabBtn("links", "🔗 Links")}
         {tabBtn("order", "📋 Order")}
+        {tabBtn("comments", "💬 Comments")}
+        {tabBtn("files", "📎 Files")}
       </div>
 
       {/* Scrollable body */}
@@ -2172,6 +2607,8 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClo
         {tab === "overview" && renderOverview()}
         {tab === "links"    && renderLinks()}
         {tab === "order"    && renderOrder()}
+        {tab === "comments" && <TicketCommentsPanel ticketId={ticket.id} />}
+        {tab === "files"    && <TicketAttachmentsPanel ticketId={ticket.id} />}
       </div>
 
       {/* Actions footer */}
@@ -2214,9 +2651,75 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClo
 
 // ─── Kanban Column ────────────────────────────────────────────────────────────
 
+// ─── Bulk Action Bar ──────────────────────────────────────────────────────────
+
+const BulkActionBar = ({ count, users = [], versions = [], columns = COLUMNS, onApply, onClear }) => {
+  const [status,     setStatus]     = useState("");
+  const [priority,   setPriority]   = useState("");
+  const [assigneeId, setAssigneeId] = useState("");
+  const [versionId,  setVersionId]  = useState("");
+  const [applying,   setApplying]   = useState(false);
+
+  const hasChange = !!(status || priority || assigneeId || versionId);
+
+  const handleApply = async () => {
+    const patch = {};
+    if (status)     patch.status     = status;
+    if (priority)   patch.priority   = priority;
+    if (assigneeId) patch.assigneeId = assigneeId === "__none__" ? null : assigneeId;
+    if (versionId)  patch.versionId  = versionId  === "__none__" ? null : versionId;
+    setApplying(true);
+    try { await onApply(patch); setStatus(""); setPriority(""); setAssigneeId(""); setVersionId(""); }
+    finally { setApplying(false); }
+  };
+
+  const selStyle = { fontFamily: T.body, fontSize: 12, color: T.text, background: T.bg,
+    border: `1px solid ${T.border}`, borderRadius: 6, padding: "5px 8px", outline: "none", cursor: "pointer" };
+
+  return (
+    <div style={{ position: "fixed", bottom: 24, left: "50%", transform: "translateX(-50%)",
+      display: "flex", alignItems: "center", gap: 8, padding: "10px 14px", borderRadius: 10,
+      background: T.surface, border: `1px solid ${T.border}`,
+      boxShadow: "0 8px 28px rgba(0,0,0,.4)", zIndex: 60 }}>
+      <span style={{ fontFamily: T.body, fontSize: 12, fontWeight: 700, color: T.accent,
+        whiteSpace: "nowrap", paddingRight: 4 }}>
+        {count} selected
+      </span>
+      <select value={status} onChange={e => setStatus(e.target.value)} style={selStyle}>
+        <option value="">Status…</option>
+        {columns.map(c => <option key={c} value={c}>{c}</option>)}
+      </select>
+      <select value={priority} onChange={e => setPriority(e.target.value)} style={selStyle}>
+        <option value="">Priority…</option>
+        {["Critical", "High", "Medium", "Low"].map(p => <option key={p} value={p}>{p}</option>)}
+      </select>
+      <select value={assigneeId} onChange={e => setAssigneeId(e.target.value)} style={selStyle}>
+        <option value="">Assignee…</option>
+        <option value="__none__">— Unassigned —</option>
+        {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+      </select>
+      {versions.length > 0 && (
+        <select value={versionId} onChange={e => setVersionId(e.target.value)} style={selStyle}>
+          <option value="">Version…</option>
+          <option value="__none__">— Unversioned —</option>
+          {versions.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}
+        </select>
+      )}
+      <Btn size="sm" disabled={!hasChange || applying} onClick={handleApply}>
+        {applying ? "Applying…" : `Apply to ${count}`}
+      </Btn>
+      <button type="button" onClick={onClear}
+        style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, background: "none",
+          border: "none", cursor: "pointer", padding: "4px 6px" }}>
+        Clear
+      </button>
+    </div>
+  );
+};
+
 const KanbanColumn = ({ status, tickets, allTickets, onEdit, onDelete, onMove, onPreview, onDiagram, onCoverage,
                         onDrop, colIndex, dragId, previewId, wipLimit, onSetWipLimit, columns = COLUMNS,
-                        colAccent }) => {
+                        colAccent, bulkMode = false, selectedIds, onToggleBulkSelect }) => {
   const [dropTarget, setDropTarget] = useState(null);
   const [colDragOver, setColDragOver] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -2333,6 +2836,9 @@ const KanbanColumn = ({ status, tickets, allTickets, onEdit, onDelete, onMove, o
           isDragging={dragId === t.id}
           isSelected={previewId === t.id}
           dropIndicator={dropTarget?.id === t.id ? dropTarget.side : null}
+          bulkMode={bulkMode}
+          bulkSelected={selectedIds?.has(t.id) ?? false}
+          onToggleBulkSelect={onToggleBulkSelect}
           onEdit={onEdit}
           onDelete={onDelete}
           onMove={onMove}
@@ -3763,13 +4269,16 @@ const KanbanPage = () => {
   const [modal,         setModal]         = useState(null);
   const [testModal,     setTestModal]     = useState(null);
   const [testPreviewId, setTestPreviewId] = useState(null);
-  const [filter,        setFilter]        = useState({ priority: "", section: "", type: "", assigneeId: "", versionId: "" });
+  const [filter,        setFilter]        = useState({ priority: "", section: "", type: "", assigneeId: "", versionId: "", label: "" });
+  const [allLabels,     setAllLabels]     = useState([]);
   const [dragId,        setDragId]        = useState(null);
   const [previewId,     setPreviewId]     = useState(null);
   const [showReleased,  setShowReleased]  = useState(true);
   const [backlogOpen,   setBacklogOpen]   = useState(false);
   const [boardView,     setBoardView]     = useState("board"); // "board" | "roadmap" | "tests"
   const [boardMgr,      setBoardMgr]      = useState(false);
+  const [bulkMode,      setBulkMode]      = useState(false);
+  const [selectedIds,   setSelectedIds]   = useState(() => new Set());
 
   // Multi-project support
   const [projects,       setProjects]       = useState([]);
@@ -3804,16 +4313,18 @@ const KanbanPage = () => {
   const loadBoard = useCallback(async (proj) => {
     setLoading(true);
     const safe = p => p.catch(() => []);
-    const [tix, tst, cols, vers] = await Promise.all([
+    const [tix, tst, cols, vers, lbls] = await Promise.all([
       safe(api.tickets.list(proj ? { projectId: proj.id } : {})),
       safe(api.testItems.list(proj ? { projectId: proj.id } : {})),
       proj ? safe(api.kbColumns.list(proj.id))  : Promise.resolve([]),
       proj ? safe(api.kbVersions.list(proj.id)) : Promise.resolve([]),
+      safe(api.labels.list()),
     ]);
     setTickets(tix);
     setTestItems(tst);
     setColumns(cols);
     setVersions(vers);
+    setAllLabels(lbls);
     setLoading(false);
   }, []);
 
@@ -3831,6 +4342,7 @@ const KanbanPage = () => {
 
   const switchProject = async proj => {
     setCurrentProject(proj);
+    exitBulkMode();
     await loadBoard(proj);
   };
 
@@ -3846,6 +4358,7 @@ const KanbanPage = () => {
     if (filter.type)       list = list.filter(t => t.type       === filter.type);
     if (filter.assigneeId) list = list.filter(t => t.assigneeId === filter.assigneeId);
     if (filter.versionId)  list = list.filter(t => t.versionId  === filter.versionId);
+    if (filter.label)      list = list.filter(t => (t.labels || []).includes(filter.label));
     return list.sort((a, b) => a.position - b.position);
   };
 
@@ -3932,6 +4445,25 @@ const KanbanPage = () => {
     await api.tickets.remove(id);
     setTickets(p => p.filter(t => t.id !== id));
     setPreviewId(p => p === id ? null : p);
+  };
+
+  const toggleBulkSelect = id => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const exitBulkMode = () => { setBulkMode(false); setSelectedIds(new Set()); };
+
+  const handleBulkApply = async patch => {
+    const ids = Array.from(selectedIds);
+    const updated = await api.tickets.bulkUpdate(ids, patch);
+    const byId = Object.fromEntries(updated.map(t => [t.id, t]));
+    setTickets(prev => prev.map(t => byId[t.id] || t));
+    toast.success(`Updated ${ids.length} ticket${ids.length === 1 ? "" : "s"}`);
+    setSelectedIds(new Set());
   };
 
   const handleTestOutcome = async ({ newStatus, testNotes }) => {
@@ -4059,6 +4591,13 @@ const KanbanPage = () => {
                   {users.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
                 </select>
               )}
+              {allLabels.length > 0 && (
+                <select value={filter.label} onChange={e => setFilter(f => ({ ...f, label: e.target.value }))}
+                  style={{ ...inputBase, fontFamily: T.body, fontSize: 12, width: 130, cursor: "pointer" }}>
+                  <option value="">All labels</option>
+                  {allLabels.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+              )}
               <button type="button" onClick={() => setBacklogOpen(true)}
                 style={{ fontFamily: T.body, fontSize: 12, cursor: "pointer",
                   padding: "5px 12px", borderRadius: 7, display: "flex", alignItems: "center", gap: 6,
@@ -4082,6 +4621,16 @@ const KanbanPage = () => {
                 {showReleased ? "● Released" : "○ Released"}
               </button>
             </>
+          )}
+          {canEdit && boardView === "board" && (
+            <button type="button" onClick={() => bulkMode ? exitBulkMode() : setBulkMode(true)}
+              style={{ fontFamily: T.body, fontSize: 12, cursor: "pointer",
+                padding: "5px 12px", borderRadius: 7,
+                border: `1px solid ${bulkMode ? T.accent : T.border}`,
+                background: bulkMode ? T.accent + "10" : "none",
+                color: bulkMode ? T.accent : T.textMuted, transition: "all .15s" }}>
+              {bulkMode ? `☑ Select (${selectedIds.size})` : "☐ Select"}
+            </button>
           )}
           {canEdit && (
             <button type="button" onClick={() => setBoardMgr(true)}
@@ -4179,9 +4728,23 @@ const KanbanPage = () => {
                   previewId={previewId}
                   wipLimit={wipLimits[col] ?? null}
                   onSetWipLimit={limit => setWipLimit(col, limit)}
+                  bulkMode={bulkMode}
+                  selectedIds={selectedIds}
+                  onToggleBulkSelect={toggleBulkSelect}
                 />
               ))}
           </div>
+
+          {bulkMode && selectedIds.size > 0 && (
+            <BulkActionBar
+              count={selectedIds.size}
+              users={users}
+              versions={versions}
+              columns={colNames}
+              onApply={handleBulkApply}
+              onClear={() => setSelectedIds(new Set())}
+            />
+          )}
 
           {/* Preview panel */}
           {preview && (
@@ -4199,6 +4762,7 @@ const KanbanPage = () => {
               onPreview={t => setPreviewId(t.id)}
               onDiagram={t => setDiagramTicket(t)}
               onCoverage={t => setCoverageTicket(t)}
+              onLabelsChanged={load}
             />
           )}
         </div>
@@ -4234,6 +4798,7 @@ const KanbanPage = () => {
             versions={versions}
             onSave={handleSave}
             onCancel={() => setModal(null)}
+            onLabelsChanged={load}
           />
         </Modal>
       )}

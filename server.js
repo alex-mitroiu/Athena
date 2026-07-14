@@ -2,6 +2,7 @@
 const express = require("express");
 const http    = require("http");
 const path    = require("path");
+const fs      = require("fs");
 const { WebSocketServer } = require("ws");
 const { DatabaseSync }    = require("node:sqlite");
 const bcrypt = require("bcryptjs");
@@ -125,7 +126,37 @@ db.exec(`
     ticket_id  TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS ticket_comments (
+    id         TEXT PRIMARY KEY,
+    ticket_id  TEXT NOT NULL,
+    author_id  TEXT NOT NULL,
+    body       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS ticket_attachments (
+    id          TEXT PRIMARY KEY,
+    ticket_id   TEXT NOT NULL,
+    filename    TEXT NOT NULL,
+    stored_name TEXT NOT NULL,
+    mime_type   TEXT NOT NULL DEFAULT '',
+    size_bytes  INTEGER NOT NULL DEFAULT 0,
+    uploaded_by TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS ticket_labels (
+    id         TEXT PRIMARY KEY,
+    ticket_id  TEXT NOT NULL,
+    label      TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
 `);
+
+// ─── Incremental migrations (existing DBs — CREATE TABLE IF NOT EXISTS above only helps fresh ones) ──
+try { db.exec("ALTER TABLE tickets ADD COLUMN story_points INTEGER DEFAULT NULL"); } catch {}
+try { db.exec("ALTER TABLE tickets ADD COLUMN custom_fields TEXT DEFAULT '{}'"); } catch {}
 
 // ─── One-time migration: move test artifacts out of tickets into test_items ────
 {
@@ -247,6 +278,8 @@ const mapTicket = r => ({
   testNotes:       r.test_notes      || null,
   projectId:       r.project_id      || null,
   versionId:       r.version_id      || null,
+  storyPoints:     r.story_points    ?? null,
+  customFields:    (() => { try { return JSON.parse(r.custom_fields || "{}"); } catch { return {}; } })(),
 });
 
 const mapTicketLink = r => ({ id: r.id, fromId: r.from_id, toId: r.to_id, linkType: r.link_type, createdAt: r.created_at });
@@ -271,6 +304,19 @@ const mapTestItem = r => ({
 });
 const mapTestCaseLink = r => ({ id: r.id, caseId: r.case_id, ticketId: r.ticket_id, createdAt: r.created_at });
 
+const mapTicketComment = r => ({
+  id: r.id, ticketId: r.ticket_id, authorId: r.author_id,
+  authorName: r.author_name || null, body: r.body, createdAt: r.created_at,
+});
+
+const mapTicketAttachment = r => ({
+  id: r.id, ticketId: r.ticket_id, filename: r.filename,
+  mimeType: r.mime_type || "", sizeBytes: r.size_bytes || 0,
+  uploadedBy: r.uploaded_by || "", createdAt: r.created_at,
+});
+
+const mapTicketLabel = r => ({ id: r.id, ticketId: r.ticket_id, label: r.label, createdAt: r.created_at });
+
 const mapKbProject  = r => ({ id: r.id, name: r.name, key: r.key, color: r.color || "#6366f1", description: r.description || "", createdAt: r.created_at });
 const mapKbVersion  = r => ({ id: r.id, projectId: r.project_id, name: r.name, description: r.description || "", status: r.status || "Planning", releaseDate: r.release_date || null, createdAt: r.created_at });
 const mapKbColumn   = r => ({ id: r.id, projectId: r.project_id, name: r.name, position: r.position ?? 0, color: r.color || "#6366f1", wipLimit: r.wip_limit ?? null, createdAt: r.created_at });
@@ -281,15 +327,38 @@ const inverseLinkLabel = lbl =>
      "duplicates": "is duplicated by", "is duplicated by": "duplicates",
      "relates to": "relates to" }[lbl] ?? lbl);
 
+// ─── Uploads ───────────────────────────────────────────────────────────────────
+
+const UPLOADS_DIR = path.join(__dirname, "uploads", "ticket-attachments");
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// ─── WebSocket (live board updates) ───────────────────────────────────────────
+
+const wss = new WebSocketServer({ server, path: "/ws" });
+
+function broadcast(type, payload) {
+  const msg = JSON.stringify({ type, payload });
+  for (const ws of wss.clients) {
+    if (ws.readyState === 1) ws.send(msg);
+  }
+}
+
+wss.on("connection", ws => {
+  ws.on("error", () => {});
+  ws.on("close",  () => {});
+});
+
 // ─── Shared context ────────────────────────────────────────────────────────────
 
 const ctx = {
   db, uid, ok, err, isUniqueViolation,
-  auth, requireRole,
+  auth, requireRole, broadcast,
   mapTicket, mapTicketLink, inverseLinkLabel,
   mapTestItem, mapTestCaseLink,
   mapKbProject, mapKbVersion, mapKbColumn,
+  mapTicketComment, mapTicketAttachment, mapTicketLabel,
   bcrypt, jwt, JWT_SECRET,
+  fs, path, UPLOADS_DIR,
 };
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -402,24 +471,6 @@ if (process.env.NODE_ENV === "production") {
   app.use(express.static(path.join(__dirname, "dist")));
   app.get("*", (req, res) => res.sendFile(path.join(__dirname, "dist", "index.html")));
 }
-
-// ─── WebSocket (live board updates) ───────────────────────────────────────────
-
-const wss = new WebSocketServer({ server, path: "/ws" });
-const subs = new Map();
-
-function broadcast(type, payload) {
-  const msg = JSON.stringify({ type, payload });
-  for (const ws of wss.clients) {
-    if (ws.readyState === 1) ws.send(msg);
-  }
-}
-ctx.broadcast = broadcast;
-
-wss.on("connection", ws => {
-  ws.on("error", () => {});
-  ws.on("close",  () => {});
-});
 
 // ─── Seed default admin if no users exist ────────────────────────────────────
 

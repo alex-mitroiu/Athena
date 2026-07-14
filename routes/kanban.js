@@ -1,9 +1,9 @@
 "use strict";
 
 module.exports = function kanbanRoutes(app, ctx) {
-  const { db, ok, err, uid, auth, requireRole,
-          mapTicket, mapTicketLink, inverseLinkLabel,
-          mapKbProject, mapKbVersion, mapKbColumn } = ctx;
+  const { db, ok, err, uid, auth, requireRole, broadcast,
+          mapTicket, mapTicketLink, inverseLinkLabel, mapTicketComment, mapTicketAttachment, mapTicketLabel,
+          mapKbProject, mapKbVersion, mapKbColumn, fs, path, UPLOADS_DIR } = ctx;
 
   const write = requireRole(["operator", "admin"]);
 
@@ -24,7 +24,11 @@ module.exports = function kanbanRoutes(app, ctx) {
     // Fix 1: no longer includes NULL project_id rows — standalone starts clean
     if (projectId) { query += " AND t.project_id=?"; params.push(projectId); }
     query += " ORDER BY t.status, t.position, t.created_at";
-    ok(res, db.prepare(query).all(...params).map(mapTicket));
+    const rows = db.prepare(query).all(...params);
+    const labelsByTicket = {};
+    for (const l of db.prepare("SELECT ticket_id, label FROM ticket_labels ORDER BY label").all())
+      (labelsByTicket[l.ticket_id] ||= []).push(l.label);
+    ok(res, rows.map(r => ({ ...mapTicket(r), labels: labelsByTicket[r.id] || [] })));
   });
 
   app.post("/api/tickets", write, (req, res) => {
@@ -32,7 +36,7 @@ module.exports = function kanbanRoutes(app, ctx) {
       title, section = "", description = "", priority = "Medium", status = "Ready",
       externalRef = null, type = "Task", version = "",
       parentId = null, assigneeId = null, dueDate = null, testNotes = null,
-      projectId = null, versionId = null,
+      projectId = null, versionId = null, storyPoints = null, customFields = null,
     } = req.body;
     if (!title) return err(res, "title required");
     const id  = `TKT-${uid()}`;
@@ -41,12 +45,46 @@ module.exports = function kanbanRoutes(app, ctx) {
       INSERT INTO tickets
         (id, title, section, description, priority, status, position, created_at,
          external_ref, type, version, parent_id, assignee_id, due_date, test_notes,
-         project_id, version_id)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         project_id, version_id, story_points, custom_fields)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(id, title, section, description, priority, status, pos, new Date().toISOString(),
            externalRef || null, type, version, parentId || null, assigneeId || null,
-           dueDate || null, testNotes || null, projectId || null, versionId || null);
+           dueDate || null, testNotes || null, projectId || null, versionId || null,
+           storyPoints === "" || storyPoints === null ? null : Number(storyPoints),
+           JSON.stringify(customFields && typeof customFields === "object" ? customFields : {}));
     ok(res, mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(id)), 201);
+  });
+
+  app.patch("/api/tickets/bulk", write, (req, res) => {
+    const { ids, patch } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) return err(res, "ids array required");
+    const ALLOWED = { status: "status", priority: "priority", assigneeId: "assignee_id", versionId: "version_id", storyPoints: "story_points" };
+    const fields = Object.keys(patch || {}).filter(k => ALLOWED[k]);
+    if (fields.length === 0) return err(res, `patch must include at least one of: ${Object.keys(ALLOWED).join(", ")}`);
+
+    const nextPosByStatus = {};
+    const updated = [];
+    for (const id of ids) {
+      if (!db.prepare("SELECT id FROM tickets WHERE id=?").get(id)) continue;
+      const sets = [], vals = [];
+      for (const f of fields) {
+        const value = patch[f];
+        sets.push(`${ALLOWED[f]}=?`);
+        vals.push(f === "status" || f === "priority" ? value : f === "storyPoints" ? (value === "" || value === null ? null : Number(value)) : (value || null));
+        if (f === "status") {
+          if (nextPosByStatus[value] === undefined) {
+            nextPosByStatus[value] = (db.prepare("SELECT MAX(position) AS m FROM tickets WHERE status=?").get(value)?.m ?? -1) + 1;
+          }
+          sets.push("position=?");
+          vals.push(nextPosByStatus[value]++);
+        }
+      }
+      vals.push(id);
+      db.prepare(`UPDATE tickets SET ${sets.join(",")} WHERE id=?`).run(...vals);
+      updated.push(mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(id)));
+    }
+    broadcast("tickets_bulk_updated", { tickets: updated });
+    ok(res, updated);
   });
 
   app.put("/api/tickets/:id", write, (req, res) => {
@@ -68,16 +106,23 @@ module.exports = function kanbanRoutes(app, ctx) {
       testNotes   = existing.test_notes,
       projectId   = existing.project_id,
       versionId   = existing.version_id,
+      storyPoints = existing.story_points,
+      customFields,
     } = req.body;
+    const fields = customFields !== undefined
+      ? (customFields && typeof customFields === "object" ? customFields : {})
+      : (() => { try { return JSON.parse(existing.custom_fields || "{}"); } catch { return {}; } })();
     const info = db.prepare(`
       UPDATE tickets
       SET title=?, section=?, description=?, priority=?, status=?, position=?,
           external_ref=?, type=?, version=?, parent_id=?, assignee_id=?, due_date=?,
-          test_notes=?, project_id=?, version_id=?
+          test_notes=?, project_id=?, version_id=?, story_points=?, custom_fields=?
       WHERE id=?
     `).run(title, section, description, priority, status, position,
            externalRef || null, type, version, parentId || null, assigneeId || null,
            dueDate || null, testNotes || null, projectId || null, versionId || null,
+           storyPoints === "" || storyPoints === null || storyPoints === undefined ? null : Number(storyPoints),
+           JSON.stringify(fields),
            req.params.id);
     if (info.changes === 0) return err(res, "Not found", 404);
     ok(res, mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(req.params.id)));
@@ -86,6 +131,125 @@ module.exports = function kanbanRoutes(app, ctx) {
   app.delete("/api/tickets/:id", write, (req, res) => {
     const info = db.prepare("DELETE FROM tickets WHERE id=?").run(req.params.id);
     if (info.changes === 0) return err(res, "Not found", 404);
+    ok(res, { deleted: req.params.id });
+  });
+
+  // ─── Ticket Comments ──────────────────────────────────────────────────────
+
+  const COMMENT_JOIN = `
+    SELECT c.*, u.name AS author_name
+    FROM   ticket_comments c
+    LEFT   JOIN users u ON c.author_id = u.id
+  `;
+
+  app.get("/api/tickets/:id/comments", auth(), (req, res) => {
+    const rows = db.prepare(`${COMMENT_JOIN} WHERE c.ticket_id=? ORDER BY c.created_at ASC`).all(req.params.id);
+    ok(res, rows.map(mapTicketComment));
+  });
+
+  app.post("/api/tickets/:id/comments", write, (req, res) => {
+    const { body } = req.body || {};
+    if (!body || !body.trim()) return err(res, "body required");
+    if (!db.prepare("SELECT id FROM tickets WHERE id=?").get(req.params.id)) return err(res, "Ticket not found", 404);
+    const id  = `CMT-${uid()}`;
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO ticket_comments (id,ticket_id,author_id,body,created_at) VALUES (?,?,?,?,?)")
+      .run(id, req.params.id, req.user.id, body.trim(), now);
+    const comment = mapTicketComment(db.prepare(`${COMMENT_JOIN} WHERE c.id=?`).get(id));
+    broadcast("ticket_comment_added", { ticketId: req.params.id, comment });
+    ok(res, comment, 201);
+  });
+
+  app.delete("/api/tickets/:id/comments/:commentId", write, (req, res) => {
+    const c = db.prepare("SELECT * FROM ticket_comments WHERE id=? AND ticket_id=?").get(req.params.commentId, req.params.id);
+    if (!c) return err(res, "Not found", 404);
+    if (c.author_id !== req.user.id && !(req.user.roles || []).includes("admin"))
+      return err(res, "Only the author or an admin can delete this comment", 403);
+    db.prepare("DELETE FROM ticket_comments WHERE id=?").run(req.params.commentId);
+    broadcast("ticket_comment_removed", { ticketId: req.params.id, commentId: req.params.commentId });
+    ok(res, { deleted: req.params.commentId });
+  });
+
+  // ─── Ticket Attachments ───────────────────────────────────────────────────
+
+  app.get("/api/tickets/:id/attachments", auth(), (req, res) => {
+    const rows = db.prepare("SELECT * FROM ticket_attachments WHERE ticket_id=? ORDER BY created_at DESC").all(req.params.id);
+    ok(res, rows.map(mapTicketAttachment));
+  });
+
+  app.post("/api/tickets/:id/attachments", write, (req, res) => {
+    const { filename, mimeType, data } = req.body || {};
+    if (!filename || !data) return err(res, "filename and data are required");
+    if (!db.prepare("SELECT id FROM tickets WHERE id=?").get(req.params.id)) return err(res, "Ticket not found", 404);
+    try {
+      const buf        = Buffer.from(data, "base64");
+      const ext        = path.extname(filename) || "";
+      const storedName = `${Date.now()}_${uid()}${ext}`;
+      fs.writeFileSync(path.join(UPLOADS_DIR, storedName), buf);
+      const id      = `ATT-${uid()}`;
+      const now     = new Date().toISOString();
+      const uploader = req.user?.name || req.user?.email || "";
+      db.prepare(`INSERT INTO ticket_attachments
+        (id, ticket_id, filename, stored_name, mime_type, size_bytes, uploaded_by, created_at)
+        VALUES (?,?,?,?,?,?,?,?)`)
+        .run(id, req.params.id, filename, storedName, mimeType || "", buf.length, uploader, now);
+      const attachment = mapTicketAttachment(db.prepare("SELECT * FROM ticket_attachments WHERE id=?").get(id));
+      broadcast("ticket_attachment_added", { ticketId: req.params.id, attachment });
+      ok(res, attachment, 201);
+    } catch (e) { err(res, e.message, 500); }
+  });
+
+  app.get("/api/attachments/:id/download", auth(), (req, res) => {
+    const a = db.prepare("SELECT * FROM ticket_attachments WHERE id=?").get(req.params.id);
+    if (!a) return err(res, "Not found", 404);
+    const filePath = path.join(UPLOADS_DIR, a.stored_name);
+    if (!fs.existsSync(filePath)) return err(res, "File not found on disk", 404);
+    const inline = (a.mime_type || "").startsWith("image/") || a.mime_type === "application/pdf";
+    res.setHeader("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${a.filename}"`);
+    res.setHeader("Content-Type", a.mime_type || "application/octet-stream");
+    fs.createReadStream(filePath).pipe(res);
+  });
+
+  app.delete("/api/attachments/:id", write, (req, res) => {
+    const a = db.prepare("SELECT * FROM ticket_attachments WHERE id=?").get(req.params.id);
+    if (!a) return err(res, "Not found", 404);
+    try { fs.unlinkSync(path.join(UPLOADS_DIR, a.stored_name)); } catch {}
+    db.prepare("DELETE FROM ticket_attachments WHERE id=?").run(req.params.id);
+    broadcast("ticket_attachment_removed", { ticketId: a.ticket_id, attachmentId: req.params.id });
+    ok(res, { deleted: req.params.id });
+  });
+
+  // ─── Ticket Labels ────────────────────────────────────────────────────────
+
+  app.get("/api/labels", auth(), (req, res) => {
+    const rows = db.prepare("SELECT DISTINCT label FROM ticket_labels ORDER BY label").all();
+    ok(res, rows.map(r => r.label));
+  });
+
+  app.get("/api/tickets/:id/labels", auth(), (req, res) => {
+    const rows = db.prepare("SELECT * FROM ticket_labels WHERE ticket_id=? ORDER BY label").all(req.params.id);
+    ok(res, rows.map(mapTicketLabel));
+  });
+
+  app.post("/api/tickets/:id/labels", write, (req, res) => {
+    const label = (req.body?.label || "").trim();
+    if (!label) return err(res, "label required");
+    if (!db.prepare("SELECT id FROM tickets WHERE id=?").get(req.params.id)) return err(res, "Ticket not found", 404);
+    if (db.prepare("SELECT id FROM ticket_labels WHERE ticket_id=? AND label=?").get(req.params.id, label))
+      return err(res, "Label already applied");
+    const id = `LBL-${uid()}`;
+    db.prepare("INSERT INTO ticket_labels (id,ticket_id,label,created_at) VALUES (?,?,?,?)")
+      .run(id, req.params.id, label, new Date().toISOString());
+    const created = mapTicketLabel(db.prepare("SELECT * FROM ticket_labels WHERE id=?").get(id));
+    broadcast("ticket_label_added", { ticketId: req.params.id, label: created });
+    ok(res, created, 201);
+  });
+
+  app.delete("/api/ticket-labels/:id", write, (req, res) => {
+    const l = db.prepare("SELECT * FROM ticket_labels WHERE id=?").get(req.params.id);
+    if (!l) return err(res, "Not found", 404);
+    db.prepare("DELETE FROM ticket_labels WHERE id=?").run(req.params.id);
+    broadcast("ticket_label_removed", { ticketId: l.ticket_id, labelId: req.params.id });
     ok(res, { deleted: req.params.id });
   });
 

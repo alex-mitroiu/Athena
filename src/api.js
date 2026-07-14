@@ -41,15 +41,40 @@ export const api = {
     remove: (id)              => req("DELETE", `/users/${id}`),
   },
 
+  labels: {
+    list: () => req("GET", "/labels"),
+  },
+
   tickets: {
     list:    (p = {})   => req("GET",    `/tickets${Object.keys(p).length ? "?" + new URLSearchParams(p) : ""}`),
     create:  (data)     => req("POST",   "/tickets", data),
     update:  (id, data) => req("PUT",    `/tickets/${id}`, data),
     remove:  (id)       => req("DELETE", `/tickets/${id}`),
+    bulkUpdate: (ids, patch) => req("PATCH", "/tickets/bulk", { ids, patch }),
     links:   (id)       => req("GET",    `/tickets/${id}/links`),
     addLink: (id, data) => req("POST",   `/tickets/${id}/links`, data),
     removeLink: (id)    => req("DELETE", `/ticket-links/${id}`),
     testedBy: (id)      => req("GET",    `/tickets/${id}/tested-by`),
+    comments:      (id)       => req("GET",    `/tickets/${id}/comments`),
+    addComment:    (id, data) => req("POST",   `/tickets/${id}/comments`, data),
+    removeComment: (id, cid)  => req("DELETE", `/tickets/${id}/comments/${cid}`),
+    attachments:      (id)       => req("GET",    `/tickets/${id}/attachments`),
+    addAttachment:    (id, data) => req("POST",   `/tickets/${id}/attachments`, data),
+    removeAttachment: (attId)    => req("DELETE", `/attachments/${attId}`),
+    labels:      (id)          => req("GET",    `/tickets/${id}/labels`),
+    addLabel:    (id, label)   => req("POST",   `/tickets/${id}/labels`, { label }),
+    removeLabel: (labelId)     => req("DELETE", `/ticket-labels/${labelId}`),
+    downloadAttachment: async (attId, filename) => {
+      const res = await fetch(`/api/attachments/${attId}/download`, {
+        headers: { Authorization: `Bearer ${getToken()}` },
+      });
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement("a");
+      a.href = url; a.download = filename; a.click();
+      URL.revokeObjectURL(url);
+    },
   },
 
   testItems: {
