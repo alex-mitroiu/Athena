@@ -160,6 +160,94 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS kb_sprints (
+    id         TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES kb_projects(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    start_date TEXT DEFAULT NULL,
+    end_date   TEXT DEFAULT NULL,
+    status     TEXT NOT NULL DEFAULT 'Planning',
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS kb_sprint_snapshots (
+    id               TEXT PRIMARY KEY,
+    sprint_id        TEXT NOT NULL REFERENCES kb_sprints(id) ON DELETE CASCADE,
+    date             TEXT NOT NULL,
+    remaining_points INTEGER NOT NULL DEFAULT 0,
+    total_points     INTEGER NOT NULL DEFAULT 0,
+    created_at       TEXT NOT NULL,
+    UNIQUE(sprint_id, date)
+  );
+
+  CREATE TABLE IF NOT EXISTS saved_filters (
+    id          TEXT PRIMARY KEY,
+    user_id     TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    entity_type TEXT NOT NULL DEFAULT 'ticket',
+    query       TEXT NOT NULL DEFAULT '{}',
+    created_at  TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS test_case_data_rows (
+    id         TEXT PRIMARY KEY,
+    case_id    TEXT NOT NULL,
+    row_data   TEXT NOT NULL DEFAULT '{}',
+    status     TEXT NOT NULL DEFAULT 'Ready',
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS notifications (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    type       TEXT NOT NULL,
+    message    TEXT NOT NULL,
+    ticket_id  TEXT DEFAULT NULL,
+    is_read    INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS dashboard_widgets (
+    id         TEXT PRIMARY KEY,
+    user_id    TEXT NOT NULL,
+    widget_type TEXT NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    config     TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS work_logs (
+    id         TEXT PRIMARY KEY,
+    ticket_id  TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    minutes    INTEGER NOT NULL,
+    logged_at  TEXT NOT NULL,
+    note       TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS baselines (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    description TEXT DEFAULT '',
+    created_by  TEXT DEFAULT '',
+    created_at  TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS baseline_tickets (
+    id          TEXT PRIMARY KEY,
+    baseline_id TEXT NOT NULL REFERENCES baselines(id) ON DELETE CASCADE,
+    ticket_id   TEXT NOT NULL,
+    title       TEXT NOT NULL,
+    type        TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    priority    TEXT NOT NULL,
+    story_points INTEGER DEFAULT NULL,
+    assignee_name TEXT DEFAULT ''
+  );
+
   CREATE TABLE IF NOT EXISTS team_members (
     id         TEXT PRIMARY KEY,
     team_id    TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
@@ -178,6 +266,12 @@ try { db.exec("ALTER TABLE tickets ADD COLUMN team_id TEXT DEFAULT NULL"); } cat
 // Roadmap Gantt mode (TKT-AGH5M7): start_date pairs with the existing due_date to
 // let RoadmapView plot Epics as date-axis bars instead of only progress swimlanes.
 try { db.exec("ALTER TABLE tickets ADD COLUMN start_date TEXT DEFAULT NULL"); } catch {}
+// Sprints (TKT-GB8PGQ) — story_points already exists; sprint_id is the missing piece.
+try { db.exec("ALTER TABLE tickets ADD COLUMN sprint_id TEXT DEFAULT NULL"); } catch {}
+// Approval workflows (TKT-S5RZ6D) — generic, applies to any ticket type.
+try { db.exec("ALTER TABLE tickets ADD COLUMN approval_status TEXT DEFAULT NULL"); } catch {}
+try { db.exec("ALTER TABLE tickets ADD COLUMN approved_by TEXT DEFAULT ''"); } catch {}
+try { db.exec("ALTER TABLE tickets ADD COLUMN approved_at TEXT DEFAULT NULL"); } catch {}
 
 // ─── One-time migration: move test artifacts out of tickets into test_items ────
 {
@@ -302,7 +396,12 @@ const mapTicket = r => ({
   testNotes:       r.test_notes      || null,
   projectId:       r.project_id      || null,
   versionId:       r.version_id      || null,
+  sprintId:        r.sprint_id       || null,
+  sprintName:      r.sprint_name     || null,
   storyPoints:     r.story_points    ?? null,
+  approvalStatus:  r.approval_status || null,
+  approvedBy:      r.approved_by     || "",
+  approvedAt:      r.approved_at     || null,
   customFields:    (() => { try { return JSON.parse(r.custom_fields || "{}"); } catch { return {}; } })(),
 });
 
@@ -342,6 +441,16 @@ const mapTicketAttachment = r => ({
 const mapTicketLabel = r => ({ id: r.id, ticketId: r.ticket_id, label: r.label, createdAt: r.created_at });
 
 const mapTeam = (r, members = []) => ({ id: r.id, name: r.name, color: r.color || "#6366f1", createdAt: r.created_at, members });
+
+const mapSprint = r => ({ id: r.id, projectId: r.project_id, name: r.name, startDate: r.start_date || null, endDate: r.end_date || null, status: r.status || "Planning", createdAt: r.created_at });
+const mapSprintSnapshot = r => ({ id: r.id, sprintId: r.sprint_id, date: r.date, remainingPoints: r.remaining_points, totalPoints: r.total_points });
+const mapSavedFilter = r => ({ id: r.id, userId: r.user_id, name: r.name, entityType: r.entity_type, query: (() => { try { return JSON.parse(r.query || "{}"); } catch { return {}; } })(), createdAt: r.created_at });
+const mapTestDataRow = r => ({ id: r.id, caseId: r.case_id, rowData: (() => { try { return JSON.parse(r.row_data || "{}"); } catch { return {}; } })(), status: r.status || "Ready", position: r.position ?? 0, createdAt: r.created_at });
+const mapNotification = r => ({ id: r.id, userId: r.user_id, type: r.type, message: r.message, ticketId: r.ticket_id || null, isRead: r.is_read === 1, createdAt: r.created_at });
+const mapDashboardWidget = r => ({ id: r.id, userId: r.user_id, widgetType: r.widget_type, position: r.position ?? 0, config: (() => { try { return JSON.parse(r.config || "{}"); } catch { return {}; } })(), createdAt: r.created_at });
+const mapWorkLog = r => ({ id: r.id, ticketId: r.ticket_id, userId: r.user_id, userName: r.user_name || null, minutes: r.minutes, loggedAt: r.logged_at, note: r.note || "", createdAt: r.created_at });
+const mapBaseline = r => ({ id: r.id, projectId: r.project_id, name: r.name, description: r.description || "", createdBy: r.created_by || "", createdAt: r.created_at });
+const mapBaselineTicket = r => ({ id: r.id, baselineId: r.baseline_id, ticketId: r.ticket_id, title: r.title, type: r.type, status: r.status, priority: r.priority, storyPoints: r.story_points ?? null, assigneeName: r.assignee_name || "" });
 
 const mapKbProject  = r => ({ id: r.id, name: r.name, key: r.key, color: r.color || "#6366f1", description: r.description || "", createdAt: r.created_at });
 const mapKbVersion  = r => ({ id: r.id, projectId: r.project_id, name: r.name, description: r.description || "", status: r.status || "Planning", releaseDate: r.release_date || null, createdAt: r.created_at });
@@ -384,6 +493,8 @@ const ctx = {
   mapKbProject, mapKbVersion, mapKbColumn,
   mapTicketComment, mapTicketAttachment, mapTicketLabel,
   mapTeam,
+  mapSprint, mapSprintSnapshot, mapSavedFilter, mapTestDataRow, mapNotification,
+  mapDashboardWidget, mapWorkLog, mapBaseline, mapBaselineTicket,
   bcrypt, jwt, JWT_SECRET,
   fs, path, UPLOADS_DIR,
 };
@@ -392,6 +503,7 @@ const ctx = {
 
 require("./routes/kanban")(app, ctx);
 require("./routes/teams")(app, ctx);
+require("./routes/extras")(app, ctx);
 require("./routes/testcases")(app, ctx);
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

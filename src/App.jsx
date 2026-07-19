@@ -7,6 +7,7 @@ import { AuthContext } from "./AuthContext";
 import { VERSION, CODENAME, COPYRIGHT_YEAR, COPYRIGHT_OWNER } from "./version";
 
 import LoginPage      from "./pages/LoginPage";
+import DashboardPage  from "./pages/DashboardPage";
 import KanbanPage     from "./pages/KanbanPage";
 import ReleasesPage   from "./pages/ReleasesPage";
 import TestPlansPage  from "./pages/TestPlansPage";
@@ -20,6 +21,100 @@ import UserManualPage from "./pages/UserManualPage";
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
 const THEME_KEY = "athena_theme";
+
+// ─── Notification Bell (TKT-RZRUER) ────────────────────────────────────────────
+// Polls every 30s for new assignment notifications. Self-contained popover — no
+// dedicated page, since a short recent list plus mark-read is all this needs.
+
+const NotificationBell = ({ onOpenTicket }) => {
+  const [items, setItems] = useState([]);
+  const [open,  setOpen]  = useState(false);
+
+  const load = () => api.notifications.list().then(setItems).catch(() => {});
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 30000);
+    return () => clearInterval(id);
+  }, []);
+
+  const unread = items.filter(n => !n.isRead).length;
+
+  const handleOpen = async () => {
+    setOpen(o => !o);
+  };
+
+  const markRead = async n => {
+    if (!n.isRead) {
+      try { await api.notifications.markRead(n.id); setItems(prev => prev.map(x => x.id === n.id ? { ...x, isRead: true } : x)); }
+      catch {}
+    }
+    if (n.ticketId) onOpenTicket?.(n.ticketId);
+    setOpen(false);
+  };
+
+  const markAllRead = async () => {
+    try { await api.notifications.markAllRead(); setItems(prev => prev.map(x => ({ ...x, isRead: true }))); }
+    catch {}
+  };
+
+  const fmtTime = iso => {
+    const diffMin = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    if (diffMin < 1) return "just now";
+    if (diffMin < 60) return `${diffMin}m ago`;
+    if (diffMin < 1440) return `${Math.round(diffMin / 60)}h ago`;
+    return new Date(iso).toLocaleDateString();
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button onClick={handleOpen} title="Notifications"
+        style={{ position: "relative", background: "none", border: "none", cursor: "pointer",
+          fontSize: 17, padding: 4, color: T.textMuted, lineHeight: 1 }}>
+        🔔
+        {unread > 0 && (
+          <span style={{ position: "absolute", top: -2, right: -2, background: T.danger, color: "#fff",
+            fontFamily: T.mono, fontSize: 8.5, fontWeight: 700, borderRadius: 8, padding: "0 4px",
+            minWidth: 13, textAlign: "center", lineHeight: "13px" }}>
+            {unread > 9 ? "9+" : unread}
+          </span>
+        )}
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
+          <div style={{ position: "absolute", top: "calc(100% + 6px)", right: 0, zIndex: 999,
+            width: 300, maxHeight: 360, overflowY: "auto",
+            background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
+            boxShadow: "0 10px 32px rgba(0,0,0,.3)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+              padding: "9px 12px", borderBottom: `1px solid ${T.border}` }}>
+              <span style={{ fontFamily: T.body, fontSize: 12, fontWeight: 700, color: T.text }}>Notifications</span>
+              {unread > 0 && (
+                <button onClick={markAllRead} style={{ background: "none", border: "none", cursor: "pointer",
+                  fontFamily: T.body, fontSize: 11, color: T.accent }}>Mark all read</button>
+              )}
+            </div>
+            {items.length === 0 ? (
+              <div style={{ padding: 20, textAlign: "center", fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>
+                No notifications yet.
+              </div>
+            ) : items.map(n => (
+              <div key={n.id} onClick={() => markRead(n)}
+                style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "9px 12px", cursor: "pointer",
+                  borderBottom: `1px solid ${T.border}22`, background: n.isRead ? "transparent" : T.accent + "0d" }}>
+                {!n.isRead && <span style={{ width: 7, height: 7, borderRadius: "50%", background: T.accent, flexShrink: 0, marginTop: 4 }} />}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontFamily: T.body, fontSize: 12, color: T.text, lineHeight: 1.4 }}>{n.message}</div>
+                  <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted, marginTop: 2 }}>{fmtTime(n.createdAt)}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
 
 // ─── Nav button ───────────────────────────────────────────────────────────────
 
@@ -184,15 +279,17 @@ export default function App() {
           <div style={{ padding: "16px 16px 12px", display: "flex", alignItems: "center", gap: 10,
             borderBottom: `1px solid ${T.border}` }}>
             <span style={{ fontSize: 22 }}>🦉</span>
-            <div>
+            <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ fontFamily: T.head, fontSize: 15, fontWeight: 800, color: T.text }}>Athena</div>
               <div style={{ fontFamily: T.mono, fontSize: 9, color: T.textMuted, letterSpacing: ".05em" }}>v{VERSION} · {CODENAME}</div>
             </div>
+            <NotificationBell onOpenTicket={() => setPage("kanban")} />
           </div>
 
           {/* Nav */}
           <nav style={{ flex: 1, overflowY: "auto", padding: "8px 6px" }}>
             <NavSection label="Board" />
+            {nb("dashboard",  "📊", "Dashboard")}
             {nb("kanban",     "📋", "Integration Board")}
             {nb("releases",   "🏷", "Releases", true)}
             {nb("test-plans", "🧪", "Test Plans", true)}
@@ -244,6 +341,7 @@ export default function App() {
 
         {/* ── Main ── */}
         <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "0 20px" }}>
+          {page === "dashboard"    && <DashboardPage />}
           {page === "kanban"       && <KanbanPage />}
           {page === "releases"     && <ReleasesPage />}
           {page === "test-plans"   && <TestPlansPage />}

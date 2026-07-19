@@ -1,7 +1,7 @@
 "use strict";
 
 module.exports = function testCasesRoutes(app, ctx) {
-  const { db, ok, err, uid, auth, requireRole, mapTestItem, mapTestCaseLink } = ctx;
+  const { db, ok, err, uid, auth, requireRole, mapTestItem, mapTestCaseLink, mapTestDataRow } = ctx;
 
   const write = requireRole(["operator", "admin"]);
 
@@ -158,6 +158,42 @@ module.exports = function testCasesRoutes(app, ctx) {
       caseTitle: r.case_title || r.case_id, caseStatus: r.case_status || "",
       ticketTitle: r.ticket_title || r.ticket_id, ticketStatus: r.ticket_status || "", ticketType: r.ticket_type || "",
     })));
+  });
+
+  // ─── Data-driven Test Cases (TKT-TM7OGI) ──────────────────────────────────
+  // A "data row" is one parameterized execution variant of a Test Case, with its
+  // own pass/fail status and a flexible name->value map (no fixed parameter-
+  // definition schema needed — different rows can carry different keys).
+
+  app.get("/api/test-items/:id/data-rows", auth(), (req, res) => {
+    const rows = db.prepare("SELECT * FROM test_case_data_rows WHERE case_id=? ORDER BY position ASC, created_at ASC").all(req.params.id);
+    ok(res, rows.map(mapTestDataRow));
+  });
+
+  app.post("/api/test-items/:id/data-rows", write, (req, res) => {
+    const { rowData = {}, status = "Ready" } = req.body || {};
+    if (!db.prepare("SELECT id FROM test_items WHERE id=? AND type='Test Case'").get(req.params.id)) return err(res, "Test case not found", 404);
+    const pos = (db.prepare("SELECT MAX(position) AS m FROM test_case_data_rows WHERE case_id=?").get(req.params.id)?.m ?? -1) + 1;
+    const id  = `TDR-${uid()}`;
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO test_case_data_rows (id,case_id,row_data,status,position,created_at) VALUES (?,?,?,?,?,?)")
+      .run(id, req.params.id, JSON.stringify(rowData && typeof rowData === "object" ? rowData : {}), status, pos, now);
+    ok(res, mapTestDataRow(db.prepare("SELECT * FROM test_case_data_rows WHERE id=?").get(id)), 201);
+  });
+
+  app.put("/api/data-rows/:id", write, (req, res) => {
+    const existing = db.prepare("SELECT * FROM test_case_data_rows WHERE id=?").get(req.params.id);
+    if (!existing) return err(res, "Not found", 404);
+    const { rowData = JSON.parse(existing.row_data || "{}"), status = existing.status } = req.body || {};
+    db.prepare("UPDATE test_case_data_rows SET row_data=?, status=? WHERE id=?")
+      .run(JSON.stringify(rowData && typeof rowData === "object" ? rowData : {}), status, req.params.id);
+    ok(res, mapTestDataRow(db.prepare("SELECT * FROM test_case_data_rows WHERE id=?").get(req.params.id)));
+  });
+
+  app.delete("/api/data-rows/:id", write, (req, res) => {
+    const info = db.prepare("DELETE FROM test_case_data_rows WHERE id=?").run(req.params.id);
+    if (info.changes === 0) return err(res, "Not found", 404);
+    ok(res, { deleted: req.params.id });
   });
 
   // ─── Story Links (Test Case ↔ ticket, fixed "Tests" / "Is tested by") ─────

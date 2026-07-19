@@ -22,16 +22,21 @@ const SECTIONS = [
   "UN Location Codes", "Customers", "API / Backend", "UI / UX", "Landing Page", "Kanban",
 ];
 
-const LINK_TYPES = ["Relates to", "Blocks", "Duplicates", "Implements"];
-const INVERSE_LABEL = { "Blocks": "Is blocked by", "Duplicates": "Is duplicated by", "Implements": "Is implemented by", "Relates to": "Relates to" };
+const LINK_TYPES = ["Relates to", "Blocks", "Duplicates", "Implements", "Satisfies"];
+const INVERSE_LABEL = { "Blocks": "Is blocked by", "Duplicates": "Is duplicated by", "Implements": "Is implemented by", "Relates to": "Relates to", "Satisfies": "Is satisfied by" };
 
-const TYPES = ["Epic", "Story", "Feature", "Bug", "Improvement", "Task", "Chore"];
+// Requirement (TKT-L9ZW5G) — a dedicated type distinct from Story: a Story is
+// delivery work, a Requirement is the thing being satisfied. Linked via the
+// existing ticket_links mechanism (new "Satisfies" type) rather than a bespoke
+// relation table — no new backend concept needed beyond one more link_type value.
+const TYPES = ["Epic", "Requirement", "Story", "Feature", "Bug", "Improvement", "Task", "Chore"];
 const TEST_TYPES = ["Test Folder", "Test Plan", "Test Run", "Test Case"];
 const TEST_STATUSES = ["Ready", "In Progress", "In Testing", "Testing Failed", "Done", "Ready to Deploy", "Released", "Cancelled"];
 const TEST_PARENT_TYPES = { "Test Run": ["Test Plan"], "Test Case": ["Test Run", "Test Plan"] };
 
 const TYPE_ICON = {
   Epic:          "⚡",
+  Requirement:   "📐",
   Story:         "📖",
   Feature:       "✨",
   Bug:           "🦟",
@@ -46,6 +51,7 @@ const TYPE_ICON = {
 
 const TYPE_VARIANT = {
   Epic:          "warning",
+  Requirement:   "purple",
   Story:         "info",
   Feature:       "info",
   Bug:           "danger",
@@ -63,6 +69,8 @@ const PRIORITIES = ["Critical", "High", "Medium", "Low"];
 const PRIORITY_VARIANT = {
   Critical: "danger", High: "warning", Medium: "info", Low: "default",
 };
+
+const APPROVAL_COLOR = { Pending: "#f59e0b", Approved: "#22c55e", Rejected: "#ef4444" };
 
 const PRIORITY_DOT = {
   Critical: T?.danger  || "#ef4444",
@@ -1078,6 +1086,104 @@ const TicketCommentsPanel = ({ ticketId }) => {
 
 // ─── Ticket Attachments Panel ─────────────────────────────────────────────────
 
+// ─── Time Tracking / Work Log (TKT-91OLB9) ────────────────────────────────────
+
+const TicketWorkLogPanel = ({ ticketId }) => {
+  const { user, canEdit, isAdmin } = useAuth();
+  const [logs,    setLogs]    = useState(null); // null = loading
+  const [minutes, setMinutes] = useState("");
+  const [note,    setNote]    = useState("");
+  const [posting, setPosting] = useState(false);
+
+  const load = () => api.workLogs.list(ticketId).then(setLogs).catch(() => setLogs([]));
+  useEffect(() => { load(); }, [ticketId]);
+
+  const totalMinutes = (logs || []).reduce((s, l) => s + l.minutes, 0);
+  const fmtMin = m => m >= 60 ? `${Math.floor(m / 60)}h ${m % 60 ? (m % 60) + "m" : ""}`.trim() : `${m}m`;
+
+  const handlePost = async () => {
+    const mins = Number(minutes);
+    if (!Number.isFinite(mins) || mins <= 0) return;
+    setPosting(true);
+    try {
+      await api.workLogs.create(ticketId, { minutes: mins, note: note.trim() });
+      setMinutes(""); setNote("");
+      await load();
+    } catch (e) { toast.error(e.message); }
+    setPosting(false);
+  };
+
+  const handleRemove = async id => {
+    try { await api.workLogs.remove(id); setLogs(ls => ls.filter(l => l.id !== id)); }
+    catch (e) { toast.error(e.message); }
+  };
+
+  const sectionLbl = { fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+    textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 };
+  const fmtDate = d => new Date(d).toLocaleDateString(undefined, { dateStyle: "medium" });
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <div style={sectionLbl}>Time Logged</div>
+        {totalMinutes > 0 && (
+          <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 700, color: T.accent }}>{fmtMin(totalMinutes)} total</span>
+        )}
+      </div>
+
+      {logs === null && (
+        <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>Loading…</div>
+      )}
+      {logs !== null && logs.length === 0 && (
+        <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic", marginBottom: 8 }}>
+          No time logged yet.
+        </div>
+      )}
+      {logs !== null && logs.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+          {logs.map(l => (
+            <div key={l.id} style={{ display: "flex", alignItems: "flex-start", gap: 8, padding: "8px 10px",
+              borderRadius: 7, background: T.bg, border: `1px solid ${T.border}` }}>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                  <span style={{ fontFamily: T.mono, fontSize: 12.5, fontWeight: 700, color: T.accent }}>{fmtMin(l.minutes)}</span>
+                  <span style={{ fontFamily: T.body, fontSize: 11.5, color: T.text }}>{l.userName || "Someone"}</span>
+                  <span style={{ fontFamily: T.body, fontSize: 10.5, color: T.textMuted }}>{fmtDate(l.loggedAt)}</span>
+                </div>
+                {l.note && <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, marginTop: 3 }}>{l.note}</div>}
+              </div>
+              {canEdit && (l.userId === user?.id || isAdmin) && (
+                <button onClick={() => handleRemove(l.id)} title="Delete entry"
+                  style={{ background: "none", border: "none", cursor: "pointer",
+                    color: T.textMuted, fontSize: 14, lineHeight: 1, padding: "0 2px", flexShrink: 0 }}
+                  onMouseEnter={e => e.currentTarget.style.color = T.danger}
+                  onMouseLeave={e => e.currentTarget.style.color = T.textMuted}>×</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {canEdit && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", gap: 6 }}>
+            <input type="number" min="1" value={minutes} onChange={e => setMinutes(e.target.value)}
+              placeholder="Minutes"
+              style={{ ...inputBase, fontFamily: T.mono, fontSize: 12.5 }} />
+            <input value={note} onChange={e => setNote(e.target.value)} placeholder="What did you work on? (optional)"
+              style={{ ...inputBase, fontFamily: T.body, fontSize: 12.5 }} />
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <Btn size="sm" disabled={!minutes || Number(minutes) <= 0 || posting} onClick={handlePost}>
+              {posting ? "Logging…" : "Log Time"}
+            </Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TicketAttachmentsPanel = ({ ticketId }) => {
   const { canEdit } = useAuth();
   const [attachments, setAttachments] = useState(null); // null = loading
@@ -1486,7 +1592,7 @@ const ParentPickerModal = ({ tickets = [], excludeId, onSelect, onClose, allowed
 
 // ─── Ticket Modal ─────────────────────────────────────────────────────────────
 
-const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], teams = [], versions = [], columns = COLUMNS, onSave, onCancel, onLabelsChanged }) => {
+const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], teams = [], versions = [], sprints = [], columns = COLUMNS, onSave, onCancel, onLabelsChanged }) => {
   const isEdit = !!init.id;
   const [f, setF] = useState({
     title:       init.title       || "",
@@ -1497,6 +1603,7 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], team
     status:      init.status      || columns[0] || "Ready",
     version:     init.version     || "",
     versionId:   init.versionId   || "",
+    sprintId:    init.sprintId    || "",
     assigneeId:  init.assigneeId  || "",
     teamId:      init.teamId      || "",
     startDate:   init.startDate   || "",
@@ -1636,6 +1743,14 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], team
           options={[
             { value: "", label: "— Unversioned —" },
             ...versions.map(v => ({ value: v.id, label: `${v.name}${v.status ? ` · ${v.status}` : ""}${v.releaseDate ? ` · ${v.releaseDate}` : ""}` })),
+          ]}
+        />
+      )}
+      {sprints.length > 0 && (
+        <Sel label="Sprint (optional)" value={f.sprintId} onChange={set("sprintId")}
+          options={[
+            { value: "", label: "— No Sprint —" },
+            ...sprints.map(s => ({ value: s.id, label: `${s.name}${s.status ? ` · ${s.status}` : ""}` })),
           ]}
         />
       )}
@@ -2080,13 +2195,21 @@ const TicketCard = ({ ticket, onEdit, onDelete, onMove, onPreview, onDiagram, on
 
 // ─── Ticket Preview Panel ─────────────────────────────────────────────────────
 
-const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams = [], onClose, onEdit, onMove, onDelete, onPreview, onDiagram, onCoverage, columns = COLUMNS, onLabelsChanged, onCascade }) => {
+const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams = [], onClose, onEdit, onMove, onDelete, onPreview, onDiagram, onCoverage, columns = COLUMNS, onLabelsChanged, onCascade, onTicketUpdated }) => {
   const { canEdit } = useAuth();
   const [confirm,    setConfirm]    = useState(false);
   const [tab,        setTab]        = useState("overview"); // "overview" | "links" | "order" | "comments" | "files"
   const [links,      setLinks]      = useState(null);       // null = not yet fetched
   const [childLinks, setChildLinks] = useState(null);       // per-child link map
   const [cascadeOpen, setCascadeOpen] = useState(false);
+
+  const handleApproval = async action => {
+    try {
+      const updated = await api.approvals[action](ticket.id);
+      onTicketUpdated?.(updated);
+      toast.success(action === "request" ? "Approval requested" : action === "approve" ? "Approved" : "Rejected");
+    } catch (e) { toast.error(e.message); }
+  };
 
   const parent   = ticket.parentId ? tickets.find(t => t.id === ticket.parentId) : null;
   const children = tickets.filter(t => t.parentId === ticket.id)
@@ -2224,6 +2347,15 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
           <span style={{ fontFamily: T.body, fontSize: 12, fontWeight: 600, color: T.text,
             background: T.surface, border: `1px solid ${T.border}`, borderRadius: 20, padding: "2px 10px" }}>
             👥 {ticket.teamName || ticket.teamId}
+          </span>
+        )}
+        {ticket.approvalStatus && metaRow("Approval",
+          <span style={{ fontFamily: T.mono, fontSize: 10.5, fontWeight: 700, padding: "2px 9px", borderRadius: 10,
+            color: APPROVAL_COLOR[ticket.approvalStatus] || T.textMuted,
+            background: `${APPROVAL_COLOR[ticket.approvalStatus] || T.textMuted}18`,
+            border: `1px solid ${APPROVAL_COLOR[ticket.approvalStatus] || T.textMuted}44` }}
+            title={ticket.approvedBy ? `by ${ticket.approvedBy}${ticket.approvedAt ? " · " + new Date(ticket.approvedAt).toLocaleString() : ""}` : undefined}>
+            {ticket.approvalStatus}
           </span>
         )}
         {ticket.dueDate && metaRow("Due Date",
@@ -2615,6 +2747,12 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
               ...(ticket.type === "Epic" && children.length > 0 && (ticket.assigneeId || ticket.teamId) ? [
                 { icon: "👥", label: "Apply to Children", onClick: () => setCascadeOpen(true) },
               ] : []),
+              ...(!ticket.approvalStatus || ticket.approvalStatus === "Rejected" ? [
+                { icon: "🔖", label: "Request Approval", onClick: () => handleApproval("request") },
+              ] : ticket.approvalStatus === "Pending" ? [
+                { icon: "✓", label: "Approve", onClick: () => handleApproval("approve") },
+                { icon: "✕", label: "Reject",  onClick: () => handleApproval("reject") },
+              ] : []),
               { icon: "✕", label: "Delete", variant: "danger", onClick: () => setConfirm(true) },
             ]} />
           )}
@@ -2631,6 +2769,7 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
         {tabBtn("order", "📋 Order")}
         {tabBtn("comments", "💬 Comments")}
         {tabBtn("files", "📎 Files")}
+        {tabBtn("time", "⏱ Time")}
       </div>
 
       {/* Scrollable body */}
@@ -2641,6 +2780,7 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
         {tab === "order"    && renderOrder()}
         {tab === "comments" && <TicketCommentsPanel ticketId={ticket.id} />}
         {tab === "files"    && <TicketAttachmentsPanel ticketId={ticket.id} />}
+        {tab === "time"     && <TicketWorkLogPanel ticketId={ticket.id} />}
       </div>
 
       {/* Actions footer */}
@@ -3210,13 +3350,19 @@ const BmEditForm = ({ onSave, onCancel, saving, children }) => (
 // ─── Board Manager Modal ──────────────────────────────────────────────────────
 // Tabbed manager for Projects, Columns, and Versions.
 
-const BoardManagerModal = ({ projects, currentProject, columns, versions, onClose, onRefresh, onProjectChange }) => {
+const BoardManagerModal = ({ projects, currentProject, columns, versions, sprints, tickets, onClose, onRefresh, onProjectChange }) => {
   const [tab,        setTab]        = useState("columns");
   const [editItem,   setEditItem]   = useState(null);   // item being edited or "new"
   const [form,       setForm]       = useState({});
   const [saving,     setSaving]     = useState(false);
   const [dragIdx,    setDragIdx]    = useState(null);
   const [dragOver,   setDragOver]   = useState(null);
+  const [baselines,  setBaselines]  = useState([]);
+  const [viewBaseline, setViewBaseline] = useState(null);
+
+  useEffect(() => {
+    if (currentProject) api.baselines.list(currentProject.id).then(setBaselines).catch(() => {});
+  }, [currentProject?.id]);
 
   const sf = k => v => setForm(p => ({ ...p, [k]: v }));
   const inp = { fontFamily: T.body, fontSize: 13, color: T.text, background: T.bg,
@@ -3278,6 +3424,45 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, onClos
     try { await api.kbVersions.remove(id); onRefresh(); } catch (e) { toast.error(e.message); }
   };
 
+  const SPRINT_STATUSES = ["Planning", "Active", "Completed"];
+
+  const saveSprint = async () => {
+    if (!form.name?.trim() || !currentProject) return;
+    setSaving(true);
+    try {
+      if (editItem === "new") await api.sprints.create(currentProject.id, { name: form.name, startDate: form.startDate || null, endDate: form.endDate || null, status: form.status || "Planning" });
+      else await api.sprints.update(editItem.id, { name: form.name, startDate: form.startDate || null, endDate: form.endDate || null, status: form.status || editItem.status });
+      cancelEdit(); onRefresh();
+    } catch (e) { toast.error(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const deleteSprint = async id => {
+    if (!window.confirm("Delete this sprint? Tickets will be unassigned from it.")) return;
+    try { await api.sprints.remove(id); onRefresh(); } catch (e) { toast.error(e.message); }
+  };
+
+  const saveBaseline = async () => {
+    if (!form.name?.trim() || !currentProject) return;
+    setSaving(true);
+    try {
+      await api.baselines.create(currentProject.id, { name: form.name, description: form.description || "" });
+      cancelEdit();
+      const fresh = await api.baselines.list(currentProject.id);
+      setBaselines(fresh);
+      toast.success("Baseline created");
+    } catch (e) { toast.error(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const deleteBaseline = async id => {
+    if (!window.confirm("Delete this baseline? This cannot be undone.")) return;
+    try {
+      await api.baselines.remove(id);
+      setBaselines(prev => prev.filter(b => b.id !== id));
+    } catch (e) { toast.error(e.message); }
+  };
+
   // Column drag-to-reorder
   const handleColDrop = async () => {
     if (dragIdx === null || dragOver === null || dragIdx === dragOver || !currentProject) return;
@@ -3320,7 +3505,7 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, onClos
 
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
-          {[["columns","⬛ Columns"], ["projects","📁 Projects"], ["versions","🏷 Versions"]].map(([id, label]) => (
+          {[["columns","⬛ Columns"], ["projects","📁 Projects"], ["versions","🏷 Versions"], ["sprints","🏃 Sprints"], ["baselines","📸 Baselines"]].map(([id, label]) => (
             <button key={id} type="button" onClick={() => { cancelEdit(); setTab(id); }} style={TAB_BTN(tab === id)}>{label}</button>
           ))}
         </div>
@@ -3511,16 +3696,358 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, onClos
               )}
             </div>
           )}
+
+          {/* ── Sprints tab (TKT-GB8PGQ) ── */}
+          {tab === "sprints" && (
+            <div>
+              {sprints.map(sp => (
+                editItem?.id === sp.id ? (
+                  <BmEditForm onCancel={cancelEdit} key={sp.id} onSave={saveSprint} saving={saving}>
+                    <BmFormRow label="Sprint Name"><input value={form.name || ""} onChange={e => sf("name")(e.target.value)} style={inp} autoFocus /></BmFormRow>
+                    <BmFormRow label="Status">
+                      <select value={form.status || "Planning"} onChange={e => sf("status")(e.target.value)} style={inp}>
+                        {SPRINT_STATUSES.map(s => <option key={s}>{s}</option>)}
+                      </select>
+                    </BmFormRow>
+                    <BmFormRow label="Start Date">
+                      <input type="date" value={form.startDate || ""} onChange={e => sf("startDate")(e.target.value)} style={{ ...inp, colorScheme: "dark" }} />
+                    </BmFormRow>
+                    <BmFormRow label="End Date">
+                      <input type="date" value={form.endDate || ""} onChange={e => sf("endDate")(e.target.value)} style={{ ...inp, colorScheme: "dark" }} />
+                    </BmFormRow>
+                  </BmEditForm>
+                ) : (
+                  <div key={sp.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                    borderRadius: 7, marginBottom: 5, background: T.bg, border: `1px solid ${T.border}` }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: T.text }}>{sp.name}</div>
+                      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted, display: "flex", gap: 10, marginTop: 2 }}>
+                        <span style={{ color: sp.status === "Active" ? T.accent : sp.status === "Completed" ? T.success : T.textMuted }}>{sp.status}</span>
+                        {sp.startDate && sp.endDate && <span>{sp.startDate} → {sp.endDate}</span>}
+                      </div>
+                    </div>
+                    <button type="button" onClick={() => startEdit(sp)} style={{ background: "none", border: "none",
+                      cursor: "pointer", color: T.textMuted, fontSize: 14, padding: "2px 4px" }}>✎</button>
+                    <button type="button" onClick={() => deleteSprint(sp.id)} style={{ background: "none", border: "none",
+                      cursor: "pointer", color: T.danger, fontSize: 14, padding: "2px 4px" }}>✕</button>
+                  </div>
+                )
+              ))}
+              {editItem === "new" && tab === "sprints" ? (
+                <BmEditForm onCancel={cancelEdit} onSave={saveSprint} saving={saving}>
+                  <BmFormRow label="Sprint Name"><input value={form.name || ""} onChange={e => sf("name")(e.target.value)} style={inp} autoFocus placeholder="e.g. Sprint 12" /></BmFormRow>
+                  <BmFormRow label="Status">
+                    <select value={form.status || "Planning"} onChange={e => sf("status")(e.target.value)} style={inp}>
+                      {SPRINT_STATUSES.map(s => <option key={s}>{s}</option>)}
+                    </select>
+                  </BmFormRow>
+                  <BmFormRow label="Start Date">
+                    <input type="date" value={form.startDate || ""} onChange={e => sf("startDate")(e.target.value)} style={{ ...inp, colorScheme: "dark" }} />
+                  </BmFormRow>
+                  <BmFormRow label="End Date">
+                    <input type="date" value={form.endDate || ""} onChange={e => sf("endDate")(e.target.value)} style={{ ...inp, colorScheme: "dark" }} />
+                  </BmFormRow>
+                </BmEditForm>
+              ) : (
+                <button type="button" onClick={() => startNew({ status: "Planning" })}
+                  style={{ fontFamily: T.body, fontSize: 13, color: T.accent, background: "none",
+                    border: `1px dashed ${T.accent}55`, borderRadius: 7, padding: "7px 16px",
+                    cursor: "pointer", width: "100%", textAlign: "left", marginTop: 8 }}>
+                  ＋ New Sprint
+                </button>
+              )}
+            </div>
+          )}
+
+          {/* ── Baselines tab (TKT-M6K5AP) ── */}
+          {tab === "baselines" && (
+            <div>
+              <div style={{ fontFamily: T.body, fontSize: 11.5, color: T.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
+                Freezes every ticket's title/type/status/priority/points at this moment — a reference
+                to diff against later, e.g. at a release cut. Baselines are read-only once created.
+              </div>
+              {baselines.map(b => (
+                <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                  borderRadius: 7, marginBottom: 5, background: T.bg, border: `1px solid ${T.border}` }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: T.text }}>{b.name}</div>
+                    <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted, marginTop: 2 }}>
+                      {new Date(b.createdAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}
+                      {b.createdBy && ` · ${b.createdBy}`}
+                    </div>
+                  </div>
+                  <button type="button" onClick={() => setViewBaseline(b.id)} style={{ fontFamily: T.body, fontSize: 11.5,
+                    color: T.accent, background: "none", border: `1px solid ${T.accent}44`, borderRadius: 6,
+                    padding: "4px 10px", cursor: "pointer" }}>View</button>
+                  <button type="button" onClick={() => deleteBaseline(b.id)} style={{ background: "none", border: "none",
+                    cursor: "pointer", color: T.danger, fontSize: 14, padding: "2px 4px" }}>✕</button>
+                </div>
+              ))}
+              {baselines.length === 0 && (
+                <div style={{ fontFamily: T.body, fontSize: 12.5, color: T.textMuted, fontStyle: "italic", marginBottom: 10 }}>
+                  No baselines yet.
+                </div>
+              )}
+              {editItem === "new" && tab === "baselines" ? (
+                <BmEditForm onCancel={cancelEdit} onSave={saveBaseline} saving={saving}>
+                  <BmFormRow label="Baseline Name"><input value={form.name || ""} onChange={e => sf("name")(e.target.value)} style={inp} autoFocus placeholder="e.g. v1.0 release cut" /></BmFormRow>
+                  <BmFormRow label="Description"><input value={form.description || ""} onChange={e => sf("description")(e.target.value)} style={inp} placeholder="Optional" /></BmFormRow>
+                </BmEditForm>
+              ) : (
+                <button type="button" onClick={() => startNew({})}
+                  style={{ fontFamily: T.body, fontSize: 13, color: T.accent, background: "none",
+                    border: `1px dashed ${T.accent}55`, borderRadius: 7, padding: "7px 16px",
+                    cursor: "pointer", width: "100%", textAlign: "left", marginTop: 8 }}>
+                  📸 Create Baseline (snapshot now)
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      {viewBaseline && (
+        <BaselineViewModal baselineId={viewBaseline} liveTickets={tickets} onClose={() => setViewBaseline(null)} />
+      )}
+    </div>
+  );
+};
+
+// ─── Baseline View (TKT-M6K5AP) ────────────────────────────────────────────────
+// Diffs the frozen snapshot against current live ticket state so a status/points
+// change since the baseline was taken is visible at a glance, not just a static list.
+
+const BaselineViewModal = ({ baselineId, liveTickets, onClose }) => {
+  const [data, setData] = useState(null);
+
+  useEffect(() => { api.baselines.get(baselineId).then(setData).catch(() => setData(null)); }, [baselineId]);
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 10001, background: "rgba(0,0,0,.6)",
+      display: "flex", alignItems: "center", justifyContent: "center" }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ width: "min(94vw, 760px)", maxHeight: "86vh", background: T.surface,
+        border: `1px solid ${T.border}`, borderRadius: 14, overflow: "hidden",
+        display: "flex", flexDirection: "column", boxShadow: "0 28px 80px rgba(0,0,0,.5)" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
+          padding: "14px 20px", borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ fontFamily: T.head, fontSize: 16, fontWeight: 800, color: T.text }}>
+            {data ? data.name : "Baseline"}
+          </div>
+          <button onClick={onClose} style={{ background: "none", border: "none", cursor: "pointer",
+            color: T.textMuted, fontSize: 22, lineHeight: 1, padding: "0 4px" }}>×</button>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: "14px 20px" }}>
+          {!data ? (
+            <div style={{ fontFamily: T.body, fontSize: 13, color: T.textMuted, textAlign: "center", padding: 30 }}>Loading…</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+              {data.tickets.map(bt => {
+                const live = liveTickets.find(t => t.id === bt.ticketId);
+                const statusChanged = live && live.status !== bt.status;
+                const deleted = !live;
+                return (
+                  <div key={bt.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px",
+                    borderRadius: 7, background: T.bg, border: `1px solid ${T.border}`,
+                    opacity: deleted ? 0.55 : 1 }}>
+                    <span style={{ fontSize: 12, flexShrink: 0 }}>{TYPE_ICON[bt.type] || "📋"}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontFamily: T.body, fontSize: 12.5, color: T.text,
+                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{bt.title}</div>
+                      <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.textMuted }}>{bt.ticketId}</div>
+                    </div>
+                    <span style={{ fontFamily: T.mono, fontSize: 10.5, color: T.textMuted }}>at baseline: {bt.status}</span>
+                    {deleted ? (
+                      <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.danger,
+                        background: T.danger + "18", border: `1px solid ${T.danger}44`, borderRadius: 4, padding: "1px 7px" }}>
+                        DELETED SINCE
+                      </span>
+                    ) : statusChanged ? (
+                      <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.accent,
+                        background: T.accent + "18", border: `1px solid ${T.accent}44`, borderRadius: 4, padding: "1px 7px" }}>
+                        NOW: {live.status}
+                      </span>
+                    ) : (
+                      <span style={{ fontFamily: T.mono, fontSize: 10, color: T.success }}>unchanged</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 };
 
-// ─── Roadmap View ─────────────────────────────────────────────────────────────
-// Version swim-lanes: each version is a row with tickets grouped inside.
+// ─── Sprint Board + Burndown (TKT-GB8PGQ) ─────────────────────────────────────
 
 const DONE_STATUSES = new Set(["Done", "Ready to Deploy", "Released"]);
+
+const BurndownChart = ({ sprint, data }) => {
+  if (!sprint.startDate || !sprint.endDate) return (
+    <div style={{ padding: "28px 18px", textAlign: "center", fontFamily: T.body, fontSize: 12.5, color: T.textMuted }}>
+      Set this sprint's Start and End dates (Board Settings → Sprints) to see a burndown.
+    </div>
+  );
+
+  const W = 640, H = 220, PAD = 32;
+  const dayMs = 86400000;
+  const start = new Date(sprint.startDate + "T00:00:00").getTime();
+  const end   = new Date(sprint.endDate   + "T00:00:00").getTime();
+  const totalDays = Math.max(Math.round((end - start) / dayMs), 1);
+  const total = data.totalPoints;
+
+  const x = day => PAD + (day / totalDays) * (W - PAD * 2);
+  const y = pts => H - PAD - (total > 0 ? (pts / total) * (H - PAD * 2) : 0);
+
+  const idealPath = `M ${x(0)} ${y(total)} L ${x(totalDays)} ${y(0)}`;
+
+  const snaps = data.snapshots.map(s => {
+    const day = Math.round((new Date(s.date + "T00:00:00").getTime() - start) / dayMs);
+    return { day, remaining: s.remainingPoints };
+  }).filter(s => s.day >= 0).sort((a, b) => a.day - b.day);
+  const actualPath = snaps.map((s, i) => `${i === 0 ? "M" : "L"} ${x(s.day)} ${y(s.remaining)}`).join(" ");
+
+  const todayDay = Math.round((Date.now() - start) / dayMs);
+
+  return (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: "14px 10px" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+        {/* Axes */}
+        <line x1={PAD} y1={H - PAD} x2={W - PAD} y2={H - PAD} stroke={T.border} strokeWidth="1" />
+        <line x1={PAD} y1={PAD} x2={PAD} y2={H - PAD} stroke={T.border} strokeWidth="1" />
+        {/* Today marker */}
+        {todayDay >= 0 && todayDay <= totalDays && (
+          <line x1={x(todayDay)} y1={PAD} x2={x(todayDay)} y2={H - PAD} stroke={T.accent} strokeWidth="1" strokeDasharray="3,3" />
+        )}
+        {/* Ideal line */}
+        <path d={idealPath} fill="none" stroke={T.textMuted} strokeWidth="1.5" strokeDasharray="5,4" />
+        {/* Actual line */}
+        {snaps.length > 0 && <path d={actualPath} fill="none" stroke={T.accent} strokeWidth="2.5" />}
+        {snaps.map(s => (
+          <circle key={s.day} cx={x(s.day)} cy={y(s.remaining)} r="3.5" fill={T.accent} />
+        ))}
+        {/* Y axis labels */}
+        <text x={PAD - 6} y={PAD + 4} textAnchor="end" fontSize="9" fill={T.textMuted} fontFamily="monospace">{total}</text>
+        <text x={PAD - 6} y={H - PAD} textAnchor="end" fontSize="9" fill={T.textMuted} fontFamily="monospace">0</text>
+      </svg>
+      <div style={{ display: "flex", gap: 16, justifyContent: "center", marginTop: 4 }}>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: T.body, fontSize: 11, color: T.textMuted }}>
+          <span style={{ width: 14, height: 0, borderTop: `1.5px dashed ${T.textMuted}` }} /> Ideal
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: T.body, fontSize: 11, color: T.textMuted }}>
+          <span style={{ width: 14, height: 2, background: T.accent, borderRadius: 1 }} /> Actual (remaining points)
+        </span>
+      </div>
+    </div>
+  );
+};
+
+const SprintBoardView = ({ sprints, activeSprintId, setActiveSprintId, tickets, onPreview }) => {
+  const [burndown, setBurndown] = useState(null);
+  const [loading,  setLoading]  = useState(true);
+
+  const current = sprints.find(s => s.id === activeSprintId)
+    || sprints.find(s => s.status === "Active")
+    || sprints[0];
+
+  useEffect(() => {
+    if (current && current.id !== activeSprintId) setActiveSprintId(current.id);
+  }, [current?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!current) { setLoading(false); return; }
+    setLoading(true);
+    api.sprints.burndown(current.id).then(setBurndown).catch(() => setBurndown(null)).finally(() => setLoading(false));
+  }, [current?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!current) return (
+    <div style={{ padding: "60px 24px", textAlign: "center", fontFamily: T.body, fontSize: 14, color: T.textMuted }}>
+      No sprints yet — create one in Board Settings → Sprints.
+    </div>
+  );
+
+  const sprintTickets = tickets.filter(t => t.sprintId === current.id);
+  const byCol = {};
+  for (const t of sprintTickets) (byCol[t.status] ||= []).push(t);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 16, paddingBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        {sprints.length > 1 && (
+          <select value={current.id} onChange={e => setActiveSprintId(e.target.value)}
+            style={{ ...inputBase, fontFamily: T.body, fontSize: 13, width: 220, cursor: "pointer" }}>
+            {sprints.map(s => <option key={s.id} value={s.id}>{s.name} · {s.status}</option>)}
+          </select>
+        )}
+        {current.startDate && current.endDate && (
+          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.textMuted }}>{current.startDate} → {current.endDate}</span>
+        )}
+      </div>
+
+      {loading ? (
+        <div style={{ padding: 40, textAlign: "center", color: T.textMuted, fontFamily: T.body, fontSize: 13 }}>Loading…</div>
+      ) : (
+        <>
+          {burndown && (
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+              <div style={{ flex: "1 1 420px", minWidth: 320 }}>
+                <BurndownChart sprint={current} data={burndown} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, minWidth: 160 }}>
+                {[["Total Points", burndown.totalPoints], ["Remaining", burndown.remainingPoints], ["Tickets", burndown.ticketCount]].map(([lbl, val]) => (
+                  <div key={lbl} style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 9, padding: "10px 14px" }}>
+                    <div style={{ fontFamily: T.mono, fontSize: 9.5, color: T.textMuted, textTransform: "uppercase", letterSpacing: ".06em" }}>{lbl}</div>
+                    <div style={{ fontFamily: T.head, fontSize: 20, fontWeight: 700, color: T.text }}>{val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div style={{ display: "flex", gap: 12, overflowX: "auto" }}>
+            {Object.entries(byCol).map(([status, tix]) => (
+              <div key={status} style={{ minWidth: 220, flex: "1 0 220px", background: T.surface,
+                border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
+                <div style={{ padding: "8px 12px", borderBottom: `1px solid ${T.border}`, background: T.bg,
+                  fontFamily: T.body, fontSize: 12, fontWeight: 700, color: T.text }}>
+                  {status} <span style={{ color: T.textMuted, fontWeight: 400 }}>({tix.length})</span>
+                </div>
+                <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {tix.map(t => (
+                    <div key={t.id} onClick={() => onPreview?.(t)}
+                      style={{ padding: "7px 10px", borderRadius: 7, background: T.bg,
+                        border: `1px solid ${T.border}`, cursor: "pointer" }}>
+                      <div style={{ fontFamily: T.body, fontSize: 12, color: T.text }}>{t.title}</div>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 3 }}>
+                        <span style={{ fontFamily: T.mono, fontSize: 9, color: T.textMuted }}>{t.id}</span>
+                        {t.storyPoints != null && (
+                          <span style={{ fontFamily: T.mono, fontSize: 9, fontWeight: 700, color: T.accent }}>{t.storyPoints} pts</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                  {tix.length === 0 && (
+                    <div style={{ padding: 10, fontFamily: T.body, fontSize: 11, color: T.textMuted, fontStyle: "italic", textAlign: "center" }}>Empty</div>
+                  )}
+                </div>
+              </div>
+            ))}
+            {sprintTickets.length === 0 && (
+              <div style={{ padding: 30, fontFamily: T.body, fontSize: 13, color: T.textMuted, fontStyle: "italic" }}>
+                No tickets assigned to this sprint yet — set a ticket's Sprint field to add it here.
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+// ─── Roadmap View ─────────────────────────────────────────────────────────────
+// Version swim-lanes: each version is a row with tickets grouped inside.
 
 // ─── Roadmap Gantt mode (TKT-AGH5M7) ──────────────────────────────────────────
 // Epics with both startDate and dueDate set get plotted as date-axis bars.
@@ -4504,6 +5031,94 @@ const TestSuiteView = ({ tickets, onPreview, onEdit, onAdd, onExecute, onMoveCas
   );
 };
 
+// ─── Saved Filters (TKT-3MD0S1) ────────────────────────────────────────────────
+// Persists the current combination of type/priority/version/assignee/label/text
+// filters as a named shortcut — per-user, not shared. Applying one overwrites the
+// live filter state outright rather than merging, so a saved filter always
+// reproduces exactly what was saved.
+
+const EMPTY_FILTER = { priority: "", section: "", type: "", assigneeId: "", versionId: "", label: "", q: "" };
+
+const SavedFiltersMenu = ({ open, setOpen, filter, setFilter, savedFilters, setSavedFilters }) => {
+  const btnRef = useRef(null);
+  const hasActiveFilter = Object.values(filter).some(v => v);
+
+  const handleSave = async () => {
+    const name = window.prompt("Name this filter:");
+    if (!name || !name.trim()) return;
+    try {
+      const created = await api.savedFilters.create({ name: name.trim(), entityType: "ticket", query: filter });
+      setSavedFilters(prev => [...prev, created]);
+      toast.success(`Saved filter "${name.trim()}"`);
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const handleDelete = async (e, id) => {
+    e.stopPropagation();
+    try {
+      await api.savedFilters.remove(id);
+      setSavedFilters(prev => prev.filter(f => f.id !== id));
+    } catch (e2) { toast.error(e2.message); }
+  };
+
+  return (
+    <div style={{ position: "relative" }}>
+      <button ref={btnRef} type="button" onClick={() => setOpen(o => !o)}
+        style={{ fontFamily: T.body, fontSize: 12, cursor: "pointer",
+          padding: "5px 12px", borderRadius: 7, display: "flex", alignItems: "center", gap: 6,
+          border: `1px solid ${hasActiveFilter ? T.accent + "88" : T.border}`,
+          background: hasActiveFilter ? T.accent + "10" : "none",
+          color: hasActiveFilter ? T.accent : T.textMuted }}>
+        ★ Filters
+      </button>
+      {open && (
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 998 }} />
+          <div style={{ position: "absolute", top: "calc(100% + 4px)", left: 0, zIndex: 999,
+            background: T.surface, border: `1px solid ${T.border}`, borderRadius: 9,
+            boxShadow: "0 8px 28px rgba(0,0,0,.25)", minWidth: 230, overflow: "hidden" }}>
+            <div style={{ padding: "8px 12px", borderBottom: `1px solid ${T.border}`,
+              fontFamily: T.body, fontSize: 10.5, fontWeight: 700, color: T.textMuted,
+              textTransform: "uppercase", letterSpacing: ".06em" }}>
+              Saved Filters
+            </div>
+            {savedFilters.length === 0 ? (
+              <div style={{ padding: "12px", fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>
+                None yet.
+              </div>
+            ) : savedFilters.map(f => (
+              <div key={f.id} onClick={() => { setFilter({ ...EMPTY_FILTER, ...f.query }); setOpen(false); }}
+                style={{ display: "flex", alignItems: "center", gap: 8, padding: "8px 12px", cursor: "pointer" }}
+                onMouseEnter={e => e.currentTarget.style.background = T.surfaceHover}
+                onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+                <span style={{ flex: 1, fontFamily: T.body, fontSize: 12.5, color: T.text }}>{f.name}</span>
+                <button onClick={e => handleDelete(e, f.id)} title="Delete"
+                  style={{ background: "none", border: "none", cursor: "pointer", color: T.textMuted, fontSize: 13 }}>×</button>
+              </div>
+            ))}
+            <div style={{ borderTop: `1px solid ${T.border}`, padding: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+              <button onClick={handleSave} disabled={!hasActiveFilter}
+                style={{ fontFamily: T.body, fontSize: 12, fontWeight: 600, textAlign: "left",
+                  padding: "7px 8px", borderRadius: 6, border: "none", cursor: hasActiveFilter ? "pointer" : "default",
+                  color: hasActiveFilter ? T.accent : T.textMuted, background: "none" }}>
+                ＋ Save current filter…
+              </button>
+              {hasActiveFilter && (
+                <button onClick={() => setFilter(EMPTY_FILTER)}
+                  style={{ fontFamily: T.body, fontSize: 12, textAlign: "left",
+                    padding: "7px 8px", borderRadius: 6, border: "none", cursor: "pointer",
+                    color: T.textMuted, background: "none" }}>
+                  ✕ Clear filter
+                </button>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 const KanbanPage = () => {
@@ -4516,7 +5131,9 @@ const KanbanPage = () => {
   const [modal,         setModal]         = useState(null);
   const [testModal,     setTestModal]     = useState(null);
   const [testPreviewId, setTestPreviewId] = useState(null);
-  const [filter,        setFilter]        = useState({ priority: "", section: "", type: "", assigneeId: "", versionId: "", label: "" });
+  const [filter,        setFilter]        = useState({ priority: "", section: "", type: "", assigneeId: "", versionId: "", label: "", q: "" });
+  const [savedFilters,  setSavedFilters]  = useState([]);
+  const [filtersOpen,   setFiltersOpen]   = useState(false);
   const [allLabels,     setAllLabels]     = useState([]);
   const [dragId,        setDragId]        = useState(null);
   const [previewId,     setPreviewId]     = useState(null);
@@ -4532,6 +5149,8 @@ const KanbanPage = () => {
   const [currentProject, setCurrentProject] = useState(null);
   const [columns,        setColumns]        = useState([]);
   const [versions,       setVersions]       = useState([]);
+  const [sprints,        setSprints]        = useState([]);
+  const [activeSprintId, setActiveSprintId] = useState(null);
 
   // colNames: ordered column names for the current project (or fallback to hardcoded)
   const colNames = columns.length > 0 ? columns.map(c => c.name) : COLUMNS;
@@ -4560,17 +5179,19 @@ const KanbanPage = () => {
   const loadBoard = useCallback(async (proj) => {
     setLoading(true);
     const safe = p => p.catch(() => []);
-    const [tix, tst, cols, vers, lbls] = await Promise.all([
+    const [tix, tst, cols, vers, sprs, lbls] = await Promise.all([
       safe(api.tickets.list(proj ? { projectId: proj.id } : {})),
       safe(api.testItems.list(proj ? { projectId: proj.id } : {})),
       proj ? safe(api.kbColumns.list(proj.id))  : Promise.resolve([]),
       proj ? safe(api.kbVersions.list(proj.id)) : Promise.resolve([]),
+      proj ? safe(api.sprints.list(proj.id))    : Promise.resolve([]),
       safe(api.labels.list()),
     ]);
     setTickets(tix);
     setTestItems(tst);
     setColumns(cols);
     setVersions(vers);
+    setSprints(sprs);
     setAllLabels(lbls);
     setLoading(false);
   }, []);
@@ -4597,6 +5218,7 @@ const KanbanPage = () => {
     load();
     api.users.list().then(setUsers).catch(() => {});
     api.teams.list().then(setTeams).catch(() => {});
+    api.savedFilters.list("ticket").then(setSavedFilters).catch(() => {});
   }, []);
 
   const byStatus = status => {
@@ -4607,6 +5229,7 @@ const KanbanPage = () => {
     if (filter.assigneeId) list = list.filter(t => t.assigneeId === filter.assigneeId);
     if (filter.versionId)  list = list.filter(t => t.versionId  === filter.versionId);
     if (filter.label)      list = list.filter(t => (t.labels || []).includes(filter.label));
+    if (filter.q) { const q = filter.q.trim().toLowerCase(); list = list.filter(t => t.id.toLowerCase().includes(q) || t.title.toLowerCase().includes(q)); }
     return list.sort((a, b) => a.position - b.position);
   };
 
@@ -4742,6 +5365,7 @@ const KanbanPage = () => {
       parentId:   form.parentId   || null,
       testNotes:  form.testNotes  || null,
       versionId:  form.versionId  || null,
+      sprintId:   form.sprintId   || null,
       projectId:  currentProject?.id || null,
     };
     if (modal === "add" || modal === "add-backlog") {
@@ -4820,6 +5444,9 @@ const KanbanPage = () => {
           <div style={{ display: "flex", gap: 4, background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: 3 }}>
             <button type="button" onClick={() => setBoardView("board")}  style={VIEW_BTN("board")}>📋 Board</button>
             <button type="button" onClick={() => setBoardView("roadmap")} style={VIEW_BTN("roadmap")}>🗺 Roadmap</button>
+            {sprints.length > 0 && (
+              <button type="button" onClick={() => setBoardView("sprint")} style={VIEW_BTN("sprint")}>🏃 Sprint</button>
+            )}
             <button type="button" onClick={() => setBoardView("tests")}  style={VIEW_BTN("tests")}>🧪 Tests</button>
           </div>
         </div>
@@ -4859,6 +5486,14 @@ const KanbanPage = () => {
                   {allLabels.map(l => <option key={l} value={l}>{l}</option>)}
                 </select>
               )}
+              <input value={filter.q} onChange={e => setFilter(f => ({ ...f, q: e.target.value }))}
+                placeholder="Search title or ID…"
+                style={{ ...inputBase, fontFamily: T.body, fontSize: 12, width: 150 }} />
+              <SavedFiltersMenu
+                open={filtersOpen} setOpen={setFiltersOpen}
+                filter={filter} setFilter={setFilter}
+                savedFilters={savedFilters} setSavedFilters={setSavedFilters}
+              />
               <button type="button" onClick={() => setBacklogOpen(true)}
                 style={{ fontFamily: T.body, fontSize: 12, cursor: "pointer",
                   padding: "5px 12px", borderRadius: 7, display: "flex", alignItems: "center", gap: 6,
@@ -4924,6 +5559,16 @@ const KanbanPage = () => {
           <RoadmapView
             tickets={tickets}
             versions={versions}
+            onPreview={t => setPreviewId(t.id)}
+          />
+        </div>
+      ) : boardView === "sprint" ? (
+        <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+          <SprintBoardView
+            sprints={sprints}
+            activeSprintId={activeSprintId}
+            setActiveSprintId={setActiveSprintId}
+            tickets={tickets}
             onPreview={t => setPreviewId(t.id)}
           />
         </div>
@@ -5026,6 +5671,7 @@ const KanbanPage = () => {
               onCoverage={t => setCoverageTicket(t)}
               onLabelsChanged={load}
               onCascade={handleApplyToChildren}
+              onTicketUpdated={updated => setTickets(prev => prev.map(t => t.id === updated.id ? updated : t))}
             />
           )}
         </div>
@@ -5060,6 +5706,7 @@ const KanbanPage = () => {
             teams={teams}
             columns={colNames}
             versions={versions}
+            sprints={sprints}
             onSave={handleSave}
             onCancel={() => setModal(null)}
             onLabelsChanged={load}
@@ -5090,6 +5737,8 @@ const KanbanPage = () => {
           currentProject={currentProject}
           columns={columns}
           versions={versions}
+          sprints={sprints}
+          tickets={tickets}
           onClose={() => setBoardMgr(false)}
           onRefresh={load}
           onProjectChange={switchProject}

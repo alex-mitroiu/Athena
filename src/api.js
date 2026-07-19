@@ -97,6 +97,10 @@ export const api = {
     addStoryLink:    (id, data) => req("POST",   `/test-items/${id}/story-links`, data),
     removeStoryLink: (id)       => req("DELETE", `/test-case-links/${id}`),
     copy:            (ids, projectId) => req("POST", "/test-items/copy", { ids, projectId }),
+    dataRows:      (id)       => req("GET",    `/test-items/${id}/data-rows`),
+    addDataRow:    (id, data) => req("POST",   `/test-items/${id}/data-rows`, data),
+    updateDataRow: (id, data) => req("PUT",    `/data-rows/${id}`, data),
+    removeDataRow: (id)       => req("DELETE", `/data-rows/${id}`),
   },
 
   kbProjects: {
@@ -119,6 +123,53 @@ export const api = {
     update:  (id, data)             => req("PUT",   `/kb/columns/${id}`, data),
     reorder: (projectId, order)     => req("PATCH", `/kb/projects/${projectId}/columns`, { order }),
     remove:  (id)                   => req("DELETE", `/kb/columns/${id}`),
+  },
+
+  sprints: {
+    list:      (projectId)       => req("GET",   `/kb/projects/${projectId}/sprints`),
+    create:    (projectId, data) => req("POST",  `/kb/projects/${projectId}/sprints`, data),
+    update:    (id, data)        => req("PUT",   `/kb/sprints/${id}`, data),
+    remove:    (id)              => req("DELETE", `/kb/sprints/${id}`),
+    burndown:  (id)               => req("GET",   `/kb/sprints/${id}/burndown`),
+  },
+
+  notifications: {
+    list:        ()     => req("GET",   "/notifications"),
+    markRead:    (id)   => req("PATCH", `/notifications/${id}/read`, {}),
+    markAllRead: ()     => req("PATCH", "/notifications/read-all", {}),
+  },
+
+  approvals: {
+    request: id => req("PATCH", `/tickets/${id}/request-approval`, {}),
+    approve: id => req("PATCH", `/tickets/${id}/approve`, {}),
+    reject:  id => req("PATCH", `/tickets/${id}/reject`, {}),
+  },
+
+  savedFilters: {
+    list:   (entityType) => req("GET", `/saved-filters${entityType ? "?entityType=" + entityType : ""}`),
+    create: (data)        => req("POST", "/saved-filters", data),
+    remove: (id)           => req("DELETE", `/saved-filters/${id}`),
+  },
+
+  dashboardWidgets: {
+    list:    ()          => req("GET",    "/dashboard/widgets"),
+    create:  (data)      => req("POST",   "/dashboard/widgets", data),
+    reorder: (order)     => req("PATCH",  "/dashboard/widgets/reorder", { order }),
+    remove:  (id)        => req("DELETE", `/dashboard/widgets/${id}`),
+  },
+
+  workLogs: {
+    list:    (ticketId)       => req("GET",    `/tickets/${ticketId}/work-logs`),
+    create:  (ticketId, data) => req("POST",   `/tickets/${ticketId}/work-logs`, data),
+    remove:  (id)             => req("DELETE", `/work-logs/${id}`),
+    summary: ()               => req("GET",    "/work-logs/summary"),
+  },
+
+  baselines: {
+    list:   (projectId)       => req("GET",  `/kb/projects/${projectId}/baselines`),
+    create: (projectId, data) => req("POST", `/kb/projects/${projectId}/baselines`, data),
+    get:    (id)               => req("GET",  `/baselines/${id}`),
+    remove: (id)               => req("DELETE", `/baselines/${id}`),
   },
 };
 

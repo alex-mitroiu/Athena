@@ -1,8 +1,14 @@
-export const VERSION  = "0.4.0";
+export const VERSION  = "0.5.0";
 export const BUILD    = "2026-07-19";
 export const CODENAME = "Genesis";
 
 export const CHANGELOG = [
+  {
+    version:  "0.5.0",
+    date:     "2026-07-19",
+    codename: "Genesis",
+    summary:  "ALM capability assessment, Tier B (the remaining gaps): Sprints & burndown (TKT-GB8PGQ) — new kb_sprints table, a Sprint board view with a mini-JIRA burndown chart built by upserting a daily points snapshot every time it's viewed (no cron job needed). Advanced search + saved filters (TKT-3MD0S1) — per-user named filter presets on the Kanban board. Test case parameterization (TKT-TM7OGI) — data-driven rows (input/expected/status) attached to a Test Case. Requirements ticket type (TKT-L9ZW5G) — a Requirement peer to Story, linked via a new Satisfies/Is satisfied by pair. Approval workflows (TKT-S5RZ6D) — a Pending/Approved/Rejected state machine on any ticket, requestable and actionable from the ticket preview's actions menu. Assignee notifications (TKT-RZRUER) — an in-app bell with unread badge, polling every 30s. Time tracking (TKT-91OLB9) — per-ticket work log with per-user rollups. Baselines & snapshots (TKT-M6K5AP) — freeze every ticket's title/type/status/priority/points at a point in time, then diff a baseline against live state to see what changed. Configurable dashboards (TKT-RKTB6L) — a new Dashboard page with an add/remove/reorder widget catalog (My Tickets, Sprint Burndown, Recent Notifications, Work Log Summary), saved per user.",
+  },
   {
     version:  "0.4.0",
     date:     "2026-07-19",

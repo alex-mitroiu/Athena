@@ -3,18 +3,27 @@
 module.exports = function kanbanRoutes(app, ctx) {
   const { db, ok, err, uid, auth, requireRole, broadcast,
           mapTicket, mapTicketLink, inverseLinkLabel, mapTicketComment, mapTicketAttachment, mapTicketLabel,
-          mapKbProject, mapKbVersion, mapKbColumn, fs, path, UPLOADS_DIR } = ctx;
+          mapKbProject, mapKbVersion, mapKbColumn, mapSprint, mapSprintSnapshot, mapNotification, fs, path, UPLOADS_DIR } = ctx;
 
   const write = requireRole(["operator", "admin"]);
 
   // ─── Ticket helpers ───────────────────────────────────────────────────────
 
   const TICKET_JOIN = `
-    SELECT t.*, u.name AS assignee_name, tm.name AS team_name
+    SELECT t.*, u.name AS assignee_name, tm.name AS team_name, sp.name AS sprint_name
     FROM   tickets t
     LEFT   JOIN users u ON t.assignee_id = u.id
     LEFT   JOIN teams tm ON t.team_id = tm.id
+    LEFT   JOIN kb_sprints sp ON t.sprint_id = sp.id
   `;
+
+  // Notifies the new assignee when a ticket's assignee changes (TKT-RZRUER) — fires
+  // from both POST and PUT, skips notifying someone about assigning it to themselves.
+  const notifyAssignee = (assigneeId, actingUserId, ticketId, ticketTitle) => {
+    if (!assigneeId || assigneeId === actingUserId) return;
+    db.prepare("INSERT INTO notifications (id,user_id,type,message,ticket_id,is_read,created_at) VALUES (?,?,?,?,?,0,?)")
+      .run(`NTF-${uid()}`, assigneeId, "assigned", `You were assigned to "${ticketTitle}"`, ticketId, new Date().toISOString());
+  };
 
   // ─── Tickets ──────────────────────────────────────────────────────────────
 
@@ -37,7 +46,7 @@ module.exports = function kanbanRoutes(app, ctx) {
       title, section = "", description = "", priority = "Medium", status = "Ready",
       externalRef = null, type = "Task", version = "",
       parentId = null, assigneeId = null, teamId = null, startDate = null, dueDate = null, testNotes = null,
-      projectId = null, versionId = null, storyPoints = null, customFields = null,
+      projectId = null, versionId = null, sprintId = null, storyPoints = null, customFields = null,
     } = req.body;
     if (!title) return err(res, "title required");
     const id  = `TKT-${uid()}`;
@@ -46,20 +55,21 @@ module.exports = function kanbanRoutes(app, ctx) {
       INSERT INTO tickets
         (id, title, section, description, priority, status, position, created_at,
          external_ref, type, version, parent_id, assignee_id, team_id, start_date, due_date, test_notes,
-         project_id, version_id, story_points, custom_fields)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+         project_id, version_id, sprint_id, story_points, custom_fields)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(id, title, section, description, priority, status, pos, new Date().toISOString(),
            externalRef || null, type, version, parentId || null, assigneeId || null, teamId || null,
-           startDate || null, dueDate || null, testNotes || null, projectId || null, versionId || null,
+           startDate || null, dueDate || null, testNotes || null, projectId || null, versionId || null, sprintId || null,
            storyPoints === "" || storyPoints === null ? null : Number(storyPoints),
            JSON.stringify(customFields && typeof customFields === "object" ? customFields : {}));
+    if (assigneeId) notifyAssignee(assigneeId, req.user.id, id, title);
     ok(res, mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(id)), 201);
   });
 
   app.patch("/api/tickets/bulk", write, (req, res) => {
     const { ids, patch } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) return err(res, "ids array required");
-    const ALLOWED = { status: "status", priority: "priority", assigneeId: "assignee_id", teamId: "team_id", versionId: "version_id", storyPoints: "story_points" };
+    const ALLOWED = { status: "status", priority: "priority", assigneeId: "assignee_id", teamId: "team_id", versionId: "version_id", sprintId: "sprint_id", storyPoints: "story_points" };
     const fields = Object.keys(patch || {}).filter(k => ALLOWED[k]);
     if (fields.length === 0) return err(res, `patch must include at least one of: ${Object.keys(ALLOWED).join(", ")}`);
 
@@ -82,7 +92,9 @@ module.exports = function kanbanRoutes(app, ctx) {
       }
       vals.push(id);
       db.prepare(`UPDATE tickets SET ${sets.join(",")} WHERE id=?`).run(...vals);
-      updated.push(mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(id)));
+      const row = db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(id);
+      if (fields.includes("assigneeId") && patch.assigneeId) notifyAssignee(patch.assigneeId, req.user.id, id, row.title);
+      updated.push(mapTicket(row));
     }
     broadcast("tickets_bulk_updated", { tickets: updated });
     ok(res, updated);
@@ -109,6 +121,7 @@ module.exports = function kanbanRoutes(app, ctx) {
       testNotes   = existing.test_notes,
       projectId   = existing.project_id,
       versionId   = existing.version_id,
+      sprintId    = existing.sprint_id,
       storyPoints = existing.story_points,
       customFields,
     } = req.body;
@@ -119,15 +132,16 @@ module.exports = function kanbanRoutes(app, ctx) {
       UPDATE tickets
       SET title=?, section=?, description=?, priority=?, status=?, position=?,
           external_ref=?, type=?, version=?, parent_id=?, assignee_id=?, team_id=?, start_date=?, due_date=?,
-          test_notes=?, project_id=?, version_id=?, story_points=?, custom_fields=?
+          test_notes=?, project_id=?, version_id=?, sprint_id=?, story_points=?, custom_fields=?
       WHERE id=?
     `).run(title, section, description, priority, status, position,
            externalRef || null, type, version, parentId || null, assigneeId || null, teamId || null,
-           startDate || null, dueDate || null, testNotes || null, projectId || null, versionId || null,
+           startDate || null, dueDate || null, testNotes || null, projectId || null, versionId || null, sprintId || null,
            storyPoints === "" || storyPoints === null || storyPoints === undefined ? null : Number(storyPoints),
            JSON.stringify(fields),
            req.params.id);
     if (info.changes === 0) return err(res, "Not found", 404);
+    if (assigneeId && assigneeId !== existing.assignee_id) notifyAssignee(assigneeId, req.user.id, req.params.id, title);
     ok(res, mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(req.params.id)));
   });
 
@@ -367,6 +381,62 @@ module.exports = function kanbanRoutes(app, ctx) {
     ok(res, { deleted: req.params.id });
   });
 
+  // ─── Sprints & Burndown (TKT-GB8PGQ) ──────────────────────────────────────
+  // No historical event log exists to derive a true burndown from, so the actual
+  // line is built by snapshotting today's remaining points on every view (upsert
+  // by date) — a real daily aggregate accumulates from normal usage instead of
+  // requiring a background job. The ideal line is computed client-side from the
+  // sprint's total points + start/end dates.
+
+  const DONE_STATUSES = new Set(["Done", "Ready to Deploy", "Released"]);
+
+  app.get("/api/kb/projects/:id/sprints", auth(), (req, res) => {
+    ok(res, db.prepare("SELECT * FROM kb_sprints WHERE project_id=? ORDER BY created_at ASC").all(req.params.id).map(mapSprint));
+  });
+
+  app.post("/api/kb/projects/:id/sprints", write, (req, res) => {
+    if (!db.prepare("SELECT id FROM kb_projects WHERE id=?").get(req.params.id)) return err(res, "Project not found", 404);
+    const { name, startDate = null, endDate = null, status = "Planning" } = req.body || {};
+    if (!name) return err(res, "name required");
+    const id  = `SPR-${uid()}`;
+    const now = new Date().toISOString();
+    db.prepare("INSERT INTO kb_sprints (id,project_id,name,start_date,end_date,status,created_at) VALUES (?,?,?,?,?,?,?)")
+      .run(id, req.params.id, name, startDate || null, endDate || null, status, now);
+    ok(res, mapSprint(db.prepare("SELECT * FROM kb_sprints WHERE id=?").get(id)), 201);
+  });
+
+  app.put("/api/kb/sprints/:id", write, (req, res) => {
+    const existing = db.prepare("SELECT * FROM kb_sprints WHERE id=?").get(req.params.id);
+    if (!existing) return err(res, "Not found", 404);
+    const { name = existing.name, startDate = existing.start_date, endDate = existing.end_date, status = existing.status } = req.body || {};
+    db.prepare("UPDATE kb_sprints SET name=?,start_date=?,end_date=?,status=? WHERE id=?")
+      .run(name, startDate || null, endDate || null, status, req.params.id);
+    ok(res, mapSprint(db.prepare("SELECT * FROM kb_sprints WHERE id=?").get(req.params.id)));
+  });
+
+  app.delete("/api/kb/sprints/:id", write, (req, res) => {
+    if (!db.prepare("SELECT id FROM kb_sprints WHERE id=?").get(req.params.id)) return err(res, "Not found", 404);
+    db.prepare("UPDATE tickets SET sprint_id=NULL WHERE sprint_id=?").run(req.params.id);
+    db.prepare("DELETE FROM kb_sprints WHERE id=?").run(req.params.id);
+    ok(res, { deleted: req.params.id });
+  });
+
+  app.get("/api/kb/sprints/:id/burndown", auth(), (req, res) => {
+    const sprint = db.prepare("SELECT * FROM kb_sprints WHERE id=?").get(req.params.id);
+    if (!sprint) return err(res, "Not found", 404);
+    const tix = db.prepare("SELECT status, story_points FROM tickets WHERE sprint_id=?").all(req.params.id);
+    const totalPoints = tix.reduce((s, t) => s + (t.story_points || 0), 0);
+    const remainingPoints = tix.filter(t => !DONE_STATUSES.has(t.status)).reduce((s, t) => s + (t.story_points || 0), 0);
+    const today = new Date().toISOString().slice(0, 10);
+    db.prepare(`
+      INSERT INTO kb_sprint_snapshots (id, sprint_id, date, remaining_points, total_points, created_at)
+      VALUES (?,?,?,?,?,?)
+      ON CONFLICT(sprint_id, date) DO UPDATE SET remaining_points=excluded.remaining_points, total_points=excluded.total_points
+    `).run(`SNP-${uid()}`, req.params.id, today, remainingPoints, totalPoints, new Date().toISOString());
+    const snapshots = db.prepare("SELECT * FROM kb_sprint_snapshots WHERE sprint_id=? ORDER BY date ASC").all(req.params.id).map(mapSprintSnapshot);
+    ok(res, { sprint: mapSprint(sprint), totalPoints, remainingPoints, ticketCount: tix.length, snapshots });
+  });
+
   // ─── Columns ──────────────────────────────────────────────────────────────
 
   app.get("/api/kb/projects/:id/columns", auth(), (req, res) => {
@@ -410,5 +480,56 @@ module.exports = function kanbanRoutes(app, ctx) {
     if (ticketCount > 0) return err(res, `Column has ${ticketCount} ticket(s) — move them first`);
     db.prepare("DELETE FROM kb_columns WHERE id=?").run(req.params.id);
     ok(res, { deleted: req.params.id });
+  });
+
+  // ─── Notifications (TKT-RZRUER) ───────────────────────────────────────────
+
+  app.get("/api/notifications", auth(), (req, res) => {
+    const rows = db.prepare("SELECT * FROM notifications WHERE user_id=? ORDER BY created_at DESC LIMIT 50").all(req.user.id);
+    ok(res, rows.map(mapNotification));
+  });
+
+  app.patch("/api/notifications/:id/read", auth(), (req, res) => {
+    const n = db.prepare("SELECT * FROM notifications WHERE id=?").get(req.params.id);
+    if (!n || n.user_id !== req.user.id) return err(res, "Not found", 404);
+    db.prepare("UPDATE notifications SET is_read=1 WHERE id=?").run(req.params.id);
+    ok(res, { ok: true });
+  });
+
+  app.patch("/api/notifications/read-all", auth(), (req, res) => {
+    db.prepare("UPDATE notifications SET is_read=1 WHERE user_id=? AND is_read=0").run(req.user.id);
+    ok(res, { ok: true });
+  });
+
+  // ─── Approval workflows (TKT-S5RZ6D) ──────────────────────────────────────
+  // Generic state machine on any ticket: null -> Pending -> Approved | Rejected.
+  // Requesting again after a rejection resets to Pending (a fresh review cycle),
+  // matching how a review-then-fix-then-resubmit loop actually works.
+
+  app.patch("/api/tickets/:id/request-approval", write, (req, res) => {
+    const t = db.prepare("SELECT * FROM tickets WHERE id=?").get(req.params.id);
+    if (!t) return err(res, "Not found", 404);
+    db.prepare("UPDATE tickets SET approval_status='Pending', approved_by='', approved_at=NULL WHERE id=?").run(req.params.id);
+    ok(res, mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(req.params.id)));
+  });
+
+  app.patch("/api/tickets/:id/approve", write, (req, res) => {
+    const t = db.prepare("SELECT * FROM tickets WHERE id=?").get(req.params.id);
+    if (!t) return err(res, "Not found", 404);
+    if (t.approval_status !== "Pending") return err(res, "This ticket has no pending approval request", 409);
+    const now = new Date().toISOString();
+    const reviewer = req.user.name || req.user.email || "";
+    db.prepare("UPDATE tickets SET approval_status='Approved', approved_by=?, approved_at=? WHERE id=?").run(reviewer, now, req.params.id);
+    ok(res, mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(req.params.id)));
+  });
+
+  app.patch("/api/tickets/:id/reject", write, (req, res) => {
+    const t = db.prepare("SELECT * FROM tickets WHERE id=?").get(req.params.id);
+    if (!t) return err(res, "Not found", 404);
+    if (t.approval_status !== "Pending") return err(res, "This ticket has no pending approval request", 409);
+    const now = new Date().toISOString();
+    const reviewer = req.user.name || req.user.email || "";
+    db.prepare("UPDATE tickets SET approval_status='Rejected', approved_by=?, approved_at=? WHERE id=?").run(reviewer, now, req.params.id);
+    ok(res, mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(req.params.id)));
   });
 };

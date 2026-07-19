@@ -28,6 +28,112 @@ const tcLabel = s =>
   TC_BLOCKED.has(s) ? "Blocked" : TC_ACTIVE.has(s) ? "In Progress" : "Not Executed";
 const tcColor = s => JIRA_COLOR[tcLabel(s)] ?? "#6b7280";
 
+// ─── Data-driven Test Cases (TKT-TM7OGI) ──────────────────────────────────────
+// Each row is one parameterized execution variant with its own Input/Expected
+// text and its own pass/fail status — the row_data JSON is flexible server-side,
+// but the UI settles on this one common shape (input -> expected) rather than a
+// dynamic column-definition system, which would be over-scoped for what's asked.
+
+const DataRowsPanel = ({ caseId }) => {
+  const { canEdit } = useAuth();
+  const [rows,    setRows]    = useState(null); // null = loading
+  const [saving,  setSaving]  = useState({});
+
+  const load = () => api.testItems.dataRows(caseId).then(setRows).catch(() => setRows([]));
+  useEffect(() => { load(); }, [caseId]);
+
+  const handleAdd = async () => {
+    try {
+      const created = await api.testItems.addDataRow(caseId, { rowData: { input: "", expected: "" }, status: "Ready" });
+      setRows(prev => [...(prev || []), created]);
+    } catch (e) { toast.error(e.message); }
+  };
+
+  const handleField = async (row, field, value) => {
+    const nextData = { ...row.rowData, [field]: value };
+    setRows(prev => prev.map(r => r.id === row.id ? { ...r, rowData: nextData } : r));
+    setSaving(p => ({ ...p, [row.id]: true }));
+    try { await api.testItems.updateDataRow(row.id, { rowData: nextData, status: row.status }); }
+    catch (e) { toast.error(e.message); }
+    setSaving(p => ({ ...p, [row.id]: false }));
+  };
+
+  const handleStatus = async (row, status) => {
+    setRows(prev => prev.map(r => r.id === row.id ? { ...r, status } : r));
+    try { await api.testItems.updateDataRow(row.id, { rowData: row.rowData, status }); }
+    catch (e) { toast.error(e.message); }
+  };
+
+  const handleRemove = async id => {
+    try { await api.testItems.removeDataRow(id); setRows(prev => prev.filter(r => r.id !== id)); }
+    catch (e) { toast.error(e.message); }
+  };
+
+  const cellInp = { fontFamily: T.body, fontSize: 12, color: T.text, background: T.bg,
+    border: `1px solid ${T.border}`, borderRadius: 6, padding: "5px 8px", outline: "none",
+    boxSizing: "border-box" };
+  const sectionLbl = { fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+    textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 };
+
+  return (
+    <div>
+      <div style={sectionLbl}>Data Rows{rows?.length ? ` (${rows.length})` : ""}</div>
+      <div style={{ fontFamily: T.body, fontSize: 11.5, color: T.textMuted, marginBottom: 10 }}>
+        Run this test case against multiple inputs — each row executes and passes/fails independently.
+      </div>
+
+      {rows === null ? (
+        <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>Loading…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic", marginBottom: 8 }}>
+          No data rows yet — this test case runs once, undifferentiated.
+        </div>
+      ) : (
+        <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, overflow: "hidden", marginBottom: 8 }}>
+          <div style={{ display: "flex", padding: "6px 10px", background: T.bg, borderBottom: `1px solid ${T.border}` }}>
+            <div style={{ flex: 1, fontFamily: T.mono, fontSize: 9.5, fontWeight: 700, color: T.textMuted, textTransform: "uppercase" }}>Input</div>
+            <div style={{ flex: 1, fontFamily: T.mono, fontSize: 9.5, fontWeight: 700, color: T.textMuted, textTransform: "uppercase" }}>Expected</div>
+            <div style={{ width: 100, fontFamily: T.mono, fontSize: 9.5, fontWeight: 700, color: T.textMuted, textTransform: "uppercase" }}>Status</div>
+            <div style={{ width: 24 }} />
+          </div>
+          {rows.map(row => (
+            <div key={row.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px",
+              borderBottom: `1px solid ${T.border}22` }}>
+              <input value={row.rowData.input || ""} onChange={e => handleField(row, "input", e.target.value)}
+                placeholder="e.g. username=admin" disabled={!canEdit}
+                style={{ ...cellInp, flex: 1 }} />
+              <input value={row.rowData.expected || ""} onChange={e => handleField(row, "expected", e.target.value)}
+                placeholder="e.g. 200 OK" disabled={!canEdit}
+                style={{ ...cellInp, flex: 1 }} />
+              <select value={row.status} onChange={e => handleStatus(row, e.target.value)} disabled={!canEdit}
+                style={{ ...cellInp, width: 100, cursor: canEdit ? "pointer" : "default",
+                  color: tcColor(row.status) }}>
+                {["Ready", "Done", "Testing Failed", "Cancelled"].map(s => (
+                  <option key={s} value={s}>{tcLabel(s)}</option>
+                ))}
+              </select>
+              {canEdit && (
+                <button onClick={() => handleRemove(row.id)} title="Delete row"
+                  style={{ width: 20, background: "none", border: "none", cursor: "pointer",
+                    color: T.textMuted, fontSize: 13 }}>×</button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {canEdit && (
+        <button onClick={handleAdd}
+          style={{ fontFamily: T.body, fontSize: 12, color: T.accent, background: "none",
+            border: `1px dashed ${T.accent}55`, borderRadius: 6, padding: "6px 12px",
+            cursor: "pointer", width: "100%", textAlign: "center" }}>
+          ＋ Add Data Row
+        </button>
+      )}
+    </div>
+  );
+};
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function TestCasesPage() {
@@ -703,6 +809,10 @@ export default function TestCasesPage() {
                     <span style={{ fontFamily: T.mono, fontSize: 12, color: T.text }}>{selected.dueDate}</span>
                   </div>
                 )}
+              </div>
+
+              <div style={{ borderTop: `1px solid ${T.border}`, marginTop: 16, paddingTop: 16 }}>
+                <DataRowsPanel caseId={selected.id} />
               </div>
 
               <div style={{ borderTop: `1px solid ${T.border}`, marginTop: 16, paddingTop: 16 }}>
