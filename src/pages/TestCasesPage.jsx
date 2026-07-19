@@ -43,6 +43,37 @@ export default function TestCasesPage() {
   const [modal,      setModal]      = useState(null); // { kind: "folder"|"case", parentId? }
   const [saving,     setSaving]     = useState(false);
 
+  // ── Cross-project copy (TKT-LZOXXE) ────────────────────────────────────────
+  const [copyMode,      setCopyMode]      = useState(false);
+  const [copySelected,  setCopySelected]  = useState(() => new Set());
+  const [copyModalOpen, setCopyModalOpen] = useState(false);
+  const [projects,      setProjects]      = useState([]);
+  const [copyTargetId,  setCopyTargetId]  = useState("");
+  const [copying,       setCopying]       = useState(false);
+
+  useEffect(() => { api.kbProjects.list().then(setProjects).catch(() => {}); }, []);
+
+  const toggleCopySelected = id => setCopySelected(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  const exitCopyMode = () => { setCopyMode(false); setCopySelected(new Set()); };
+
+  const handleCopyConfirm = async () => {
+    if (!copyTargetId || copySelected.size === 0) return;
+    setCopying(true);
+    try {
+      const created = await api.testItems.copy([...copySelected], copyTargetId);
+      toast.success(`Copied ${created.length} test case${created.length !== 1 ? "s" : ""} to ${projects.find(p => p.id === copyTargetId)?.name || copyTargetId}`);
+      setCopyModalOpen(false);
+      exitCopyMode();
+      setCopyTargetId("");
+    } catch (e) { toast.error(e.message); }
+    finally { setCopying(false); }
+  };
+
   const load = useCallback(async () => {
     setLoading(true);
     try { setTickets(await api.testItems.list()); }
@@ -418,7 +449,34 @@ export default function TestCasesPage() {
                 ＋ New TC
               </button>
             )}
+            {canEdit && projects.length > 1 && (
+              <button
+                onClick={() => copyMode ? exitCopyMode() : setCopyMode(true)}
+                title="Select test cases to copy to another project"
+                style={{ fontFamily: T.body, fontSize: 12, fontWeight: 600,
+                  color: copyMode ? T.accent : T.textMuted,
+                  background: copyMode ? T.accent + "18" : "transparent",
+                  border: `1px solid ${copyMode ? T.accent + "44" : T.border}`, borderRadius: 6,
+                  padding: "5px 10px", cursor: "pointer", whiteSpace: "nowrap" }}>
+                ⧉ {copyMode ? `Copy (${copySelected.size})` : "Copy"}
+              </button>
+            )}
           </div>
+          {copyMode && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontFamily: T.body, fontSize: 11, color: T.textMuted }}>
+                Select test cases, then copy to another project.
+              </span>
+              <button onClick={() => setCopyModalOpen(true)} disabled={copySelected.size === 0}
+                style={{ marginLeft: "auto", fontFamily: T.body, fontSize: 12, fontWeight: 600,
+                  color: copySelected.size === 0 ? T.textMuted : "#fff",
+                  background: copySelected.size === 0 ? T.border : T.accent,
+                  border: "none", borderRadius: 6, padding: "6px 12px",
+                  cursor: copySelected.size === 0 ? "default" : "pointer", whiteSpace: "nowrap" }}>
+                Copy {copySelected.size} to Project…
+              </button>
+            </div>
+          )}
           <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
             {Object.entries(JIRA_COLOR).map(([lbl, col]) => {
               const n = countsByLabel[lbl] ?? 0;
@@ -451,16 +509,21 @@ export default function TestCasesPage() {
             const plan  = testPlans.find(p => p.id === run?.parentId);
             const folder = testFolders.find(f => f.id === c.parentId);
             return (
-              <div key={c.id} onClick={() => setSelectedId(isSel ? null : c.id)}
+              <div key={c.id} onClick={() => copyMode ? toggleCopySelected(c.id) : setSelectedId(isSel ? null : c.id)}
                 style={{ padding: "9px 12px", borderBottom: `1px solid ${T.border}22`,
                   cursor: "pointer", userSelect: "none",
-                  background: isSel ? T.accent + "14" : "transparent",
-                  borderLeft: isSel ? `3px solid ${T.accent}` : "3px solid transparent",
+                  background: copyMode ? (copySelected.has(c.id) ? T.accent + "14" : "transparent") : (isSel ? T.accent + "14" : "transparent"),
+                  borderLeft: (copyMode ? copySelected.has(c.id) : isSel) ? `3px solid ${T.accent}` : "3px solid transparent",
                   transition: "background .12s" }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 3 }}>
-                  {/* Status dot */}
-                  <span style={{ width: 8, height: 8, borderRadius: "50%",
-                    background: col, flexShrink: 0 }} />
+                  {/* Copy-mode checkbox, or status dot */}
+                  {copyMode ? (
+                    <input type="checkbox" readOnly checked={copySelected.has(c.id)}
+                      style={{ width: 12, height: 12, cursor: "pointer", flexShrink: 0 }} />
+                  ) : (
+                    <span style={{ width: 8, height: 8, borderRadius: "50%",
+                      background: col, flexShrink: 0 }} />
+                  )}
                   {/* Priority */}
                   {c.priority && (
                     <span style={{ fontFamily: T.mono, fontSize: 9, fontWeight: 700,
@@ -652,6 +715,45 @@ export default function TestCasesPage() {
     </div>
 
     {modal && <TicketFormModal />}
+    {copyModalOpen && (
+      <div style={{ position: "fixed", inset: 0, background: "#00000055", zIndex: 1000,
+        display: "flex", alignItems: "center", justifyContent: "center" }}
+        onClick={e => { if (e.target === e.currentTarget) setCopyModalOpen(false); }}>
+        <div style={{ background: T.surface, border: `1px solid ${T.border}`,
+          borderRadius: 12, padding: "24px 24px 20px", width: 420,
+          boxShadow: "0 8px 32px #0006", fontFamily: T.body }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 6 }}>
+            Copy {copySelected.size} Test Case{copySelected.size !== 1 ? "s" : ""}
+          </div>
+          <div style={{ fontSize: 12, color: T.textMuted, marginBottom: 16, lineHeight: 1.5 }}>
+            Creates fresh, unfiled copies in the target project with status reset to Ready.
+          </div>
+          <div style={{ fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+            textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 4 }}>Target Project</div>
+          <select value={copyTargetId} onChange={e => setCopyTargetId(e.target.value)}
+            style={{ fontFamily: T.body, fontSize: 13, color: T.text, background: T.bg,
+              border: `1px solid ${T.border}`, borderRadius: 7, padding: "7px 10px",
+              outline: "none", width: "100%", boxSizing: "border-box", cursor: "pointer" }}>
+            <option value="">Select a project…</option>
+            {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 18 }}>
+            <button type="button" onClick={() => setCopyModalOpen(false)}
+              style={{ fontFamily: T.body, fontSize: 13, color: T.textMuted, background: "transparent",
+                border: `1px solid ${T.border}`, borderRadius: 7, padding: "7px 14px", cursor: "pointer" }}>
+              Cancel
+            </button>
+            <button type="button" onClick={handleCopyConfirm} disabled={!copyTargetId || copying}
+              style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: "#fff",
+                background: (!copyTargetId || copying) ? T.border : T.accent,
+                border: "none", borderRadius: 7, padding: "7px 14px",
+                cursor: (!copyTargetId || copying) ? "default" : "pointer" }}>
+              {copying ? "Copying…" : "Copy"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
     </>
   );
 }

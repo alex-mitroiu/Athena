@@ -111,6 +111,55 @@ module.exports = function testCasesRoutes(app, ctx) {
     ok(res, { deleted: req.params.id, cascaded: ids.length - 1 });
   });
 
+  // ─── Cross-project copy (TKT-LZOXXE) ─────────────────────────────────────
+  // Clones the given Test Cases as fresh, unfiled (parent_id=null) rows in the
+  // target project, with status reset to Ready — a copy is a new case to run in
+  // that project, not a record of what already passed/failed elsewhere. Only
+  // Test Case rows are cloned (not folders/plans/runs), matching the ticket's
+  // "reuse TCs across projects" framing rather than a whole-tree migration.
+  app.post("/api/test-items/copy", write, (req, res) => {
+    const { ids, projectId } = req.body || {};
+    if (!Array.isArray(ids) || ids.length === 0) return err(res, "ids array required");
+    if (!projectId) return err(res, "projectId required");
+    if (!db.prepare("SELECT id FROM kb_projects WHERE id=?").get(projectId)) return err(res, "Project not found", 404);
+    const now = new Date().toISOString();
+    const created = [];
+    for (const sourceId of ids) {
+      const src = db.prepare("SELECT * FROM test_items WHERE id=? AND type='Test Case'").get(sourceId);
+      if (!src) continue;
+      const id  = `TST-${uid()}`;
+      const pos = (db.prepare("SELECT MAX(position) AS m FROM test_items WHERE status=?").get("Ready")?.m ?? -1) + 1;
+      db.prepare(`
+        INSERT INTO test_items
+          (id, type, title, description, priority, status, position, created_at,
+           parent_id, assignee_id, due_date, test_notes, project_id, version_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      `).run(id, "Test Case", src.title, src.description, src.priority, "Ready", pos, now,
+             null, null, null, src.test_notes, projectId, null);
+      created.push(mapTestItem(db.prepare(`${TEST_ITEM_JOIN} WHERE t.id=?`).get(id)));
+    }
+    ok(res, created, 201);
+  });
+
+  // ─── Traceability matrix (TKT-CWFZPB) ────────────────────────────────────
+  // All Story<->TestCase links in one call (rows=Stories, columns=TCs), joined
+  // with the minimal fields the matrix needs — avoids an N+1 fetch-per-Story.
+  app.get("/api/test-case-links", auth(), (req, res) => {
+    const rows = db.prepare(`
+      SELECT l.id, l.case_id, l.ticket_id,
+             tc.title AS case_title, tc.status AS case_status,
+             tk.title AS ticket_title, tk.status AS ticket_status, tk.type AS ticket_type
+      FROM test_case_links l
+      LEFT JOIN test_items tc ON tc.id = l.case_id
+      LEFT JOIN tickets tk ON tk.id = l.ticket_id
+    `).all();
+    ok(res, rows.map(r => ({
+      id: r.id, caseId: r.case_id, ticketId: r.ticket_id,
+      caseTitle: r.case_title || r.case_id, caseStatus: r.case_status || "",
+      ticketTitle: r.ticket_title || r.ticket_id, ticketStatus: r.ticket_status || "", ticketType: r.ticket_type || "",
+    })));
+  });
+
   // ─── Story Links (Test Case ↔ ticket, fixed "Tests" / "Is tested by") ─────
 
   app.get("/api/test-items/:id/story-links", auth(), (req, res) => {

@@ -45,6 +45,17 @@ export const api = {
     list: () => req("GET", "/labels"),
   },
 
+  testCaseLinks: {
+    list: () => req("GET", "/test-case-links"),
+  },
+
+  teams: {
+    list:   ()     => req("GET",    "/teams"),
+    create: (data) => req("POST",   "/teams", data),
+    update: (id, data) => req("PUT", `/teams/${id}`, data),
+    remove: (id)   => req("DELETE", `/teams/${id}`),
+  },
+
   tickets: {
     list:    (p = {})   => req("GET",    `/tickets${Object.keys(p).length ? "?" + new URLSearchParams(p) : ""}`),
     create:  (data)     => req("POST",   "/tickets", data),
@@ -85,6 +96,7 @@ export const api = {
     storyLinks:      (id)       => req("GET",    `/test-items/${id}/story-links`),
     addStoryLink:    (id, data) => req("POST",   `/test-items/${id}/story-links`, data),
     removeStoryLink: (id)       => req("DELETE", `/test-case-links/${id}`),
+    copy:            (ids, projectId) => req("POST", "/test-items/copy", { ids, projectId }),
   },
 
   kbProjects: {

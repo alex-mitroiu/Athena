@@ -10,9 +10,10 @@ module.exports = function kanbanRoutes(app, ctx) {
   // ─── Ticket helpers ───────────────────────────────────────────────────────
 
   const TICKET_JOIN = `
-    SELECT t.*, u.name AS assignee_name
+    SELECT t.*, u.name AS assignee_name, tm.name AS team_name
     FROM   tickets t
     LEFT   JOIN users u ON t.assignee_id = u.id
+    LEFT   JOIN teams tm ON t.team_id = tm.id
   `;
 
   // ─── Tickets ──────────────────────────────────────────────────────────────
@@ -35,7 +36,7 @@ module.exports = function kanbanRoutes(app, ctx) {
     const {
       title, section = "", description = "", priority = "Medium", status = "Ready",
       externalRef = null, type = "Task", version = "",
-      parentId = null, assigneeId = null, dueDate = null, testNotes = null,
+      parentId = null, assigneeId = null, teamId = null, startDate = null, dueDate = null, testNotes = null,
       projectId = null, versionId = null, storyPoints = null, customFields = null,
     } = req.body;
     if (!title) return err(res, "title required");
@@ -44,12 +45,12 @@ module.exports = function kanbanRoutes(app, ctx) {
     db.prepare(`
       INSERT INTO tickets
         (id, title, section, description, priority, status, position, created_at,
-         external_ref, type, version, parent_id, assignee_id, due_date, test_notes,
+         external_ref, type, version, parent_id, assignee_id, team_id, start_date, due_date, test_notes,
          project_id, version_id, story_points, custom_fields)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+      VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     `).run(id, title, section, description, priority, status, pos, new Date().toISOString(),
-           externalRef || null, type, version, parentId || null, assigneeId || null,
-           dueDate || null, testNotes || null, projectId || null, versionId || null,
+           externalRef || null, type, version, parentId || null, assigneeId || null, teamId || null,
+           startDate || null, dueDate || null, testNotes || null, projectId || null, versionId || null,
            storyPoints === "" || storyPoints === null ? null : Number(storyPoints),
            JSON.stringify(customFields && typeof customFields === "object" ? customFields : {}));
     ok(res, mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(id)), 201);
@@ -58,7 +59,7 @@ module.exports = function kanbanRoutes(app, ctx) {
   app.patch("/api/tickets/bulk", write, (req, res) => {
     const { ids, patch } = req.body || {};
     if (!Array.isArray(ids) || ids.length === 0) return err(res, "ids array required");
-    const ALLOWED = { status: "status", priority: "priority", assigneeId: "assignee_id", versionId: "version_id", storyPoints: "story_points" };
+    const ALLOWED = { status: "status", priority: "priority", assigneeId: "assignee_id", teamId: "team_id", versionId: "version_id", storyPoints: "story_points" };
     const fields = Object.keys(patch || {}).filter(k => ALLOWED[k]);
     if (fields.length === 0) return err(res, `patch must include at least one of: ${Object.keys(ALLOWED).join(", ")}`);
 
@@ -102,6 +103,8 @@ module.exports = function kanbanRoutes(app, ctx) {
       version     = existing.version     ?? "",
       parentId    = existing.parent_id,
       assigneeId  = existing.assignee_id,
+      teamId      = existing.team_id,
+      startDate   = existing.start_date,
       dueDate     = existing.due_date,
       testNotes   = existing.test_notes,
       projectId   = existing.project_id,
@@ -115,12 +118,12 @@ module.exports = function kanbanRoutes(app, ctx) {
     const info = db.prepare(`
       UPDATE tickets
       SET title=?, section=?, description=?, priority=?, status=?, position=?,
-          external_ref=?, type=?, version=?, parent_id=?, assignee_id=?, due_date=?,
+          external_ref=?, type=?, version=?, parent_id=?, assignee_id=?, team_id=?, start_date=?, due_date=?,
           test_notes=?, project_id=?, version_id=?, story_points=?, custom_fields=?
       WHERE id=?
     `).run(title, section, description, priority, status, position,
-           externalRef || null, type, version, parentId || null, assigneeId || null,
-           dueDate || null, testNotes || null, projectId || null, versionId || null,
+           externalRef || null, type, version, parentId || null, assigneeId || null, teamId || null,
+           startDate || null, dueDate || null, testNotes || null, projectId || null, versionId || null,
            storyPoints === "" || storyPoints === null || storyPoints === undefined ? null : Number(storyPoints),
            JSON.stringify(fields),
            req.params.id);

@@ -1,6 +1,6 @@
 # 🦉 Athena
 
-**v0.1.0 · Genesis**
+**v0.3.0 · Genesis**
 
 Athena is a standalone integration board and test management tool. It combines a multi-project Kanban board with structured test management — test plans, test runs, test cases, and release versioning — in a single lightweight app.
 

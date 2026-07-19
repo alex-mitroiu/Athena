@@ -152,11 +152,32 @@ db.exec(`
     label      TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS teams (
+    id         TEXT PRIMARY KEY,
+    name       TEXT NOT NULL,
+    color      TEXT DEFAULT '#6366f1',
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS team_members (
+    id         TEXT PRIMARY KEY,
+    team_id    TEXT NOT NULL REFERENCES teams(id) ON DELETE CASCADE,
+    user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL,
+    UNIQUE(team_id, user_id)
+  );
 `);
 
 // ─── Incremental migrations (existing DBs — CREATE TABLE IF NOT EXISTS above only helps fresh ones) ──
 try { db.exec("ALTER TABLE tickets ADD COLUMN story_points INTEGER DEFAULT NULL"); } catch {}
 try { db.exec("ALTER TABLE tickets ADD COLUMN custom_fields TEXT DEFAULT '{}'"); } catch {}
+// Teams (TKT-4N18SL): a ticket — primarily an Epic — can carry a team_id alongside the
+// existing assignee_id, so ownership can be assigned to a group rather than one person.
+try { db.exec("ALTER TABLE tickets ADD COLUMN team_id TEXT DEFAULT NULL"); } catch {}
+// Roadmap Gantt mode (TKT-AGH5M7): start_date pairs with the existing due_date to
+// let RoadmapView plot Epics as date-axis bars instead of only progress swimlanes.
+try { db.exec("ALTER TABLE tickets ADD COLUMN start_date TEXT DEFAULT NULL"); } catch {}
 
 // ─── One-time migration: move test artifacts out of tickets into test_items ────
 {
@@ -274,6 +295,9 @@ const mapTicket = r => ({
   assigneeId:      r.assignee_id     || null,
   assigneeName:    r.assignee_name   || null,
   assigneeInitial: r.assignee_name   ? r.assignee_name.trim()[0].toUpperCase() : null,
+  teamId:          r.team_id         || null,
+  teamName:        r.team_name       || null,
+  startDate:       r.start_date      || null,
   dueDate:         r.due_date        || null,
   testNotes:       r.test_notes      || null,
   projectId:       r.project_id      || null,
@@ -317,6 +341,8 @@ const mapTicketAttachment = r => ({
 
 const mapTicketLabel = r => ({ id: r.id, ticketId: r.ticket_id, label: r.label, createdAt: r.created_at });
 
+const mapTeam = (r, members = []) => ({ id: r.id, name: r.name, color: r.color || "#6366f1", createdAt: r.created_at, members });
+
 const mapKbProject  = r => ({ id: r.id, name: r.name, key: r.key, color: r.color || "#6366f1", description: r.description || "", createdAt: r.created_at });
 const mapKbVersion  = r => ({ id: r.id, projectId: r.project_id, name: r.name, description: r.description || "", status: r.status || "Planning", releaseDate: r.release_date || null, createdAt: r.created_at });
 const mapKbColumn   = r => ({ id: r.id, projectId: r.project_id, name: r.name, position: r.position ?? 0, color: r.color || "#6366f1", wipLimit: r.wip_limit ?? null, createdAt: r.created_at });
@@ -357,6 +383,7 @@ const ctx = {
   mapTestItem, mapTestCaseLink,
   mapKbProject, mapKbVersion, mapKbColumn,
   mapTicketComment, mapTicketAttachment, mapTicketLabel,
+  mapTeam,
   bcrypt, jwt, JWT_SECRET,
   fs, path, UPLOADS_DIR,
 };
@@ -364,6 +391,7 @@ const ctx = {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 require("./routes/kanban")(app, ctx);
+require("./routes/teams")(app, ctx);
 require("./routes/testcases")(app, ctx);
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

@@ -13,6 +13,8 @@ import TestPlansPage  from "./pages/TestPlansPage";
 import TestRunsPage   from "./pages/TestRunsPage";
 import TestCasesPage  from "./pages/TestCasesPage";
 import UsersPage      from "./pages/UsersPage";
+import TeamsPage      from "./pages/TeamsPage";
+import TraceabilityPage from "./pages/TraceabilityPage";
 import UserManualPage from "./pages/UserManualPage";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
@@ -196,8 +198,10 @@ export default function App() {
             {nb("test-plans", "🧪", "Test Plans", true)}
             {nb("test-runs",  "🔄", "Test Runs", true)}
             {nb("test-cases", "✓",  "Test Cases", true)}
+            {nb("traceability", "🔗", "Traceability", true)}
             {isAdmin && <NavSection label="Admin" />}
             {isAdmin && nb("users", "👤", "Users")}
+            {isAdmin && nb("teams", "👥", "Teams")}
           </nav>
 
           {/* Footer */}
@@ -245,7 +249,9 @@ export default function App() {
           {page === "test-plans"   && <TestPlansPage />}
           {page === "test-runs"    && <TestRunsPage />}
           {page === "test-cases"   && <TestCasesPage />}
+          {page === "traceability" && <TraceabilityPage />}
           {page === "users"        && isAdmin && <UsersPage />}
+          {page === "teams"        && isAdmin && <TeamsPage />}
           {page === "user-manual"  && <UserManualPage />}
         </main>
 

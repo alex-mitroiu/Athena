@@ -1486,7 +1486,7 @@ const ParentPickerModal = ({ tickets = [], excludeId, onSelect, onClose, allowed
 
 // ─── Ticket Modal ─────────────────────────────────────────────────────────────
 
-const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], versions = [], columns = COLUMNS, onSave, onCancel, onLabelsChanged }) => {
+const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], teams = [], versions = [], columns = COLUMNS, onSave, onCancel, onLabelsChanged }) => {
   const isEdit = !!init.id;
   const [f, setF] = useState({
     title:       init.title       || "",
@@ -1498,6 +1498,8 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], vers
     version:     init.version     || "",
     versionId:   init.versionId   || "",
     assigneeId:  init.assigneeId  || "",
+    teamId:      init.teamId      || "",
+    startDate:   init.startDate   || "",
     dueDate:     init.dueDate     || "",
     parentId:    init.parentId    || "",
     testNotes:   init.testNotes   || "",
@@ -1545,6 +1547,26 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], vers
           onChange={v => set("storyPoints")(v === "" ? "" : v.replace(/[^0-9]/g, ""))}
           placeholder="—" />
       </div>
+
+      {f.type === "Epic" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <label style={{ fontFamily: T.body, fontSize: 11, fontWeight: 600, color: T.textMuted,
+            textTransform: "uppercase", letterSpacing: ".06em" }}>
+            Start Date <span style={{ fontWeight: 400, textTransform: "none" }}>(paired with Due Date for the Roadmap Gantt view)</span>
+          </label>
+          <input type="date" value={f.startDate} onChange={e => set("startDate")(e.target.value)}
+            style={{ ...inputBase, fontFamily: T.mono, fontSize: 13, cursor: "pointer", colorScheme: "dark" }} />
+        </div>
+      )}
+
+      {teams.length > 0 && (
+        <Sel label="Team" value={f.teamId} onChange={set("teamId")}
+          options={[
+            { value: "", label: "— No Team —" },
+            ...teams.map(t => ({ value: t.id, label: t.name })),
+          ]}
+        />
+      )}
 
       <CustomFieldsEditor value={f.customFields} onChange={set("customFields")} />
 
@@ -2058,12 +2080,13 @@ const TicketCard = ({ ticket, onEdit, onDelete, onMove, onPreview, onDiagram, on
 
 // ─── Ticket Preview Panel ─────────────────────────────────────────────────────
 
-const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClose, onEdit, onMove, onDelete, onPreview, onDiagram, onCoverage, columns = COLUMNS, onLabelsChanged }) => {
+const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams = [], onClose, onEdit, onMove, onDelete, onPreview, onDiagram, onCoverage, columns = COLUMNS, onLabelsChanged, onCascade }) => {
   const { canEdit } = useAuth();
   const [confirm,    setConfirm]    = useState(false);
   const [tab,        setTab]        = useState("overview"); // "overview" | "links" | "order" | "comments" | "files"
   const [links,      setLinks]      = useState(null);       // null = not yet fetched
   const [childLinks, setChildLinks] = useState(null);       // per-child link map
+  const [cascadeOpen, setCascadeOpen] = useState(false);
 
   const parent   = ticket.parentId ? tickets.find(t => t.id === ticket.parentId) : null;
   const children = tickets.filter(t => t.parentId === ticket.id)
@@ -2196,6 +2219,12 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClo
               {ticket.assigneeName || ticket.assigneeId}
             </span>
           </div>
+        )}
+        {ticket.teamId && metaRow("Team",
+          <span style={{ fontFamily: T.body, fontSize: 12, fontWeight: 600, color: T.text,
+            background: T.surface, border: `1px solid ${T.border}`, borderRadius: 20, padding: "2px 10px" }}>
+            👥 {ticket.teamName || ticket.teamId}
+          </span>
         )}
         {ticket.dueDate && metaRow("Due Date",
           <span style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 600, padding: "2px 8px", borderRadius: 4,
@@ -2583,6 +2612,9 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClo
                 { icon: "📊", label: "Coverage", onClick: () => onCoverage?.(ticket) },
                 { icon: "🗺", label: "Diagram",  onClick: () => onDiagram?.(ticket)  },
               ] : []),
+              ...(ticket.type === "Epic" && children.length > 0 && (ticket.assigneeId || ticket.teamId) ? [
+                { icon: "👥", label: "Apply to Children", onClick: () => setCascadeOpen(true) },
+              ] : []),
               { icon: "✕", label: "Delete", variant: "danger", onClick: () => setConfirm(true) },
             ]} />
           )}
@@ -2645,7 +2677,95 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, onClo
           onConfirm={() => { setConfirm(false); onDelete(ticket.id); onClose(); }}
           onCancel={() => setConfirm(false)} />
       )}
+      {cascadeOpen && (
+        <ApplyToChildrenModal
+          epic={ticket} children={children} teams={teams}
+          onConfirm={async () => { await onCascade?.(ticket, children); setCascadeOpen(false); }}
+          onClose={() => setCascadeOpen(false)} />
+      )}
     </div>
+  );
+};
+
+// ─── Apply Epic assignment to children (TKT-4N18SL) ──────────────────────────
+// Explicit, confirmed cascade — never automatic/silent. Shows exactly what will be
+// pushed onto every child ticket and which ones will actually change before committing,
+// so a child deliberately assigned to someone other than the epic's owner isn't
+// silently clobbered without the user seeing it coming.
+
+const ApplyToChildrenModal = ({ epic, children, teams, onConfirm, onClose }) => {
+  const [applying, setApplying] = useState(false);
+  const teamName = id => teams.find(t => t.id === id)?.name || id;
+
+  const willChange = c => c.assigneeId !== (epic.assigneeId || null) || c.teamId !== (epic.teamId || null);
+  const changingCount = children.filter(willChange).length;
+
+  const handleConfirm = async () => {
+    setApplying(true);
+    try { await onConfirm(); } finally { setApplying(false); }
+  };
+
+  return (
+    <Modal title="Apply to Children" onClose={onClose} width={520}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+        <div style={{ fontFamily: T.body, fontSize: 13, color: T.text, lineHeight: 1.5 }}>
+          This will set every child ticket of <strong>{epic.title}</strong> to:
+        </div>
+        <div style={{ display: "flex", gap: 8, padding: "10px 14px", borderRadius: 8,
+          background: T.accent + "0d", border: `1px solid ${T.accent}33` }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted, textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 3 }}>Assignee</div>
+            <div style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: T.text }}>
+              {epic.assigneeName || <span style={{ color: T.textMuted, fontWeight: 400, fontStyle: "italic" }}>— Unassigned —</span>}
+            </div>
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted, textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 3 }}>Team</div>
+            <div style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: T.text }}>
+              {epic.teamId ? `👥 ${teamName(epic.teamId)}` : <span style={{ color: T.textMuted, fontWeight: 400, fontStyle: "italic" }}>— No Team —</span>}
+            </div>
+          </div>
+        </div>
+
+        <div style={{ fontFamily: T.body, fontSize: 11, fontWeight: 700, color: T.textMuted,
+          textTransform: "uppercase", letterSpacing: ".07em" }}>
+          Affected tickets ({changingCount} of {children.length} will change)
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 5, maxHeight: 280, overflowY: "auto" }}>
+          {children.map(c => {
+            const changes = willChange(c);
+            return (
+              <div key={c.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "7px 11px",
+                borderRadius: 7, background: changes ? T.warning + "0d" : T.bg,
+                border: `1px solid ${changes ? T.warning + "33" : T.border}` }}>
+                <span style={{ fontSize: 12, flexShrink: 0 }}>{TYPE_ICON[c.type] || "📋"}</span>
+                <span style={{ fontFamily: T.body, fontSize: 12, color: T.text, flex: 1,
+                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {c.title}
+                </span>
+                <span style={{ fontFamily: T.body, fontSize: 11, color: T.textMuted, flexShrink: 0 }}>
+                  {c.assigneeName || "Unassigned"}{c.teamId ? ` · ${teamName(c.teamId)}` : ""}
+                </span>
+                {changes && (
+                  <span style={{ fontFamily: T.mono, fontSize: 9, fontWeight: 700, color: T.warning,
+                    background: T.warning + "18", border: `1px solid ${T.warning}44`,
+                    borderRadius: 4, padding: "1px 6px", flexShrink: 0 }}>
+                    CHANGES
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", paddingTop: 4 }}>
+          <Btn variant="ghost" onClick={onClose} disabled={applying}>Cancel</Btn>
+          <Btn variant="primary" onClick={handleConfirm} disabled={applying || changingCount === 0}>
+            {applying ? "Applying…" : `Apply to ${changingCount} ticket${changingCount !== 1 ? "s" : ""}`}
+          </Btn>
+        </div>
+      </div>
+    </Modal>
   );
 };
 
@@ -3402,12 +3522,137 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, onClos
 
 const DONE_STATUSES = new Set(["Done", "Ready to Deploy", "Released"]);
 
-const RoadmapView = ({ tickets, versions, onPreview }) => {
-  if (versions.length === 0) return (
+// ─── Roadmap Gantt mode (TKT-AGH5M7) ──────────────────────────────────────────
+// Epics with both startDate and dueDate set get plotted as date-axis bars.
+// Epics missing either date are listed separately rather than silently dropped,
+// since a partially-dated Epic is exactly the kind of gap a roadmap should surface.
+
+const GanttChart = ({ epics, onPreview }) => {
+  const dated   = epics.filter(e => e.startDate && e.dueDate);
+  const undated = epics.filter(e => !e.startDate || !e.dueDate);
+
+  if (dated.length === 0) return (
     <div style={{ padding: "60px 24px", textAlign: "center", fontFamily: T.body, fontSize: 14, color: T.textMuted }}>
-      <div style={{ fontSize: 40, marginBottom: 12 }}>🏷</div>
-      <div style={{ fontWeight: 600, color: T.text, marginBottom: 6 }}>No versions defined</div>
-      <div>Create versions in <strong>Board Settings → Versions</strong> to organise your roadmap.</div>
+      <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
+      <div style={{ fontWeight: 600, color: T.text, marginBottom: 6 }}>No Epics have both a Start and Due Date yet</div>
+      <div>Set both dates on an Epic (Edit → Start Date, paired with the existing Due Date) to plot it here.</div>
+    </div>
+  );
+
+  const toMs = d => new Date(d + "T00:00:00").getTime();
+  const rangeStart = Math.min(...dated.map(e => toMs(e.startDate)));
+  const rangeEnd   = Math.max(...dated.map(e => toMs(e.dueDate)));
+  const totalSpan  = Math.max(rangeEnd - rangeStart, 86400000);
+  const todayMs    = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00").getTime();
+  const todayPct   = ((todayMs - rangeStart) / totalSpan) * 100;
+
+  const fmtAxis = ms => new Date(ms).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+
+  return (
+    <div style={{ paddingBottom: 24 }}>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 18px",
+          borderBottom: `1px solid ${T.border}`, background: T.bg,
+          fontFamily: T.mono, fontSize: 10.5, color: T.textMuted }}>
+          <span>{fmtAxis(rangeStart)}</span>
+          <span>{fmtAxis(rangeEnd)}</span>
+        </div>
+        <div style={{ position: "relative", padding: "16px 18px" }}>
+          {todayPct >= 0 && todayPct <= 100 && (
+            <div style={{ position: "absolute", top: 0, bottom: 0, left: `${todayPct}%`,
+              width: 1, background: T.accent, zIndex: 1 }}
+              title={`Today · ${new Date(todayMs).toLocaleDateString()}`} />
+          )}
+          {dated.map(epic => {
+            const s = toMs(epic.startDate), e = toMs(epic.dueDate);
+            const left  = ((s - rangeStart) / totalSpan) * 100;
+            const width = Math.max(((e - s) / totalSpan) * 100, 1.5);
+            const done  = DONE_STATUSES.has(epic.status);
+            const overdue = !done && e < todayMs;
+            return (
+              <div key={epic.id} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
+                <div style={{ width: 200, flexShrink: 0, minWidth: 0, fontFamily: T.body, fontSize: 12,
+                  color: T.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  title={epic.title}>
+                  {epic.title}
+                </div>
+                <div style={{ position: "relative", flex: 1, height: 22 }}>
+                  <div onClick={() => onPreview?.(epic)}
+                    style={{ position: "absolute", left: `${left}%`, width: `${width}%`, top: 2, bottom: 2,
+                      borderRadius: 5, cursor: "pointer",
+                      background: done ? T.success : overdue ? T.danger : T.accent,
+                      opacity: done ? 0.55 : 1,
+                      display: "flex", alignItems: "center", paddingLeft: 8, minWidth: 20 }}
+                    title={`${epic.startDate} → ${epic.dueDate}${overdue ? " · Overdue" : ""}`}>
+                    <span style={{ fontFamily: T.mono, fontSize: 9, color: "#fff", fontWeight: 700,
+                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {epic.id}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {undated.length > 0 && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontFamily: T.body, fontSize: 11, fontWeight: 700, color: T.textMuted,
+            textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 }}>
+            {undated.length} Epic{undated.length !== 1 ? "s" : ""} missing a Start or Due Date
+          </div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {undated.map(epic => (
+              <div key={epic.id} onClick={() => onPreview?.(epic)}
+                style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 10px",
+                  borderRadius: 7, background: T.surface, border: `1px solid ${T.border}`, cursor: "pointer" }}>
+                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted }}>{epic.id}</span>
+                <span style={{ fontFamily: T.body, fontSize: 12, color: T.text }}>{epic.title}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const RoadmapView = ({ tickets, versions, onPreview }) => {
+  const [mode, setMode] = useState("swimlanes"); // "swimlanes" | "gantt"
+  const epics = tickets.filter(t => t.type === "Epic");
+
+  const ModeToggle = () => (
+    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 14 }}>
+      <div style={{ display: "flex", borderRadius: 7, border: `1px solid ${T.border}`, overflow: "hidden" }}>
+        {[["swimlanes", "🏷 Swimlanes"], ["gantt", "📅 Gantt"]].map(([key, label]) => (
+          <button key={key} onClick={() => setMode(key)}
+            style={{ padding: "6px 12px", border: "none", cursor: "pointer",
+              fontFamily: T.body, fontSize: 12, fontWeight: mode === key ? 700 : 400,
+              background: mode === key ? T.accent + "22" : "transparent",
+              color: mode === key ? T.accent : T.textMuted }}>
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  if (mode === "gantt") return (
+    <div style={{ overflowY: "auto", paddingBottom: 24 }}>
+      <ModeToggle />
+      <GanttChart epics={epics} onPreview={onPreview} />
+    </div>
+  );
+
+  if (versions.length === 0) return (
+    <div style={{ overflowY: "auto", paddingBottom: 24 }}>
+      <ModeToggle />
+      <div style={{ padding: "60px 24px", textAlign: "center", fontFamily: T.body, fontSize: 14, color: T.textMuted }}>
+        <div style={{ fontSize: 40, marginBottom: 12 }}>🏷</div>
+        <div style={{ fontWeight: 600, color: T.text, marginBottom: 6 }}>No versions defined</div>
+        <div>Create versions in <strong>Board Settings → Versions</strong> to organise your roadmap.</div>
+      </div>
     </div>
   );
 
@@ -3494,6 +3739,7 @@ const RoadmapView = ({ tickets, versions, onPreview }) => {
 
   return (
     <div style={{ overflowY: "auto", paddingBottom: 24 }}>
+      <ModeToggle />
       {versions.map(ver => (
         <VersionLane key={ver.id} ver={ver} tix={versionTickets(ver.id)} />
       ))}
@@ -4265,6 +4511,7 @@ const KanbanPage = () => {
   const [tickets,       setTickets]       = useState([]);
   const [testItems,     setTestItems]     = useState([]);
   const [users,         setUsers]         = useState([]);
+  const [teams,         setTeams]         = useState([]);
   const [loading,       setLoading]       = useState(true);
   const [modal,         setModal]         = useState(null);
   const [testModal,     setTestModal]     = useState(null);
@@ -4349,6 +4596,7 @@ const KanbanPage = () => {
   useEffect(() => {
     load();
     api.users.list().then(setUsers).catch(() => {});
+    api.teams.list().then(setTeams).catch(() => {});
   }, []);
 
   const byStatus = status => {
@@ -4466,6 +4714,17 @@ const KanbanPage = () => {
     setSelectedIds(new Set());
   };
 
+  // Cascade an Epic's assignee/team down to its children — always explicit and
+  // confirmed via ApplyToChildrenModal beforehand, never automatic (TKT-4N18SL).
+  const handleApplyToChildren = async (epic, epicChildren) => {
+    const ids = epicChildren.map(c => c.id);
+    if (ids.length === 0) return;
+    const updated = await api.tickets.bulkUpdate(ids, { assigneeId: epic.assigneeId || null, teamId: epic.teamId || null });
+    const byId = Object.fromEntries(updated.map(t => [t.id, t]));
+    setTickets(prev => prev.map(t => byId[t.id] || t));
+    toast.success(`Applied to ${ids.length} child ticket${ids.length === 1 ? "" : "s"}`);
+  };
+
   const handleTestOutcome = async ({ newStatus, testNotes }) => {
     const ticket = testOutcomePending;
     setTestOutcomePending(null);
@@ -4477,6 +4736,8 @@ const KanbanPage = () => {
     const payload = {
       ...form,
       assigneeId: form.assigneeId || null,
+      teamId:     form.teamId     || null,
+      startDate:  form.startDate  || null,
       dueDate:    form.dueDate    || null,
       parentId:   form.parentId   || null,
       testNotes:  form.testNotes  || null,
@@ -4755,6 +5016,7 @@ const KanbanPage = () => {
               tickets={tickets}
               testItems={testItems}
               users={users}
+              teams={teams}
               onClose={() => setPreviewId(null)}
               onEdit={() => setModal(preview)}
               onMove={handleMove}
@@ -4763,6 +5025,7 @@ const KanbanPage = () => {
               onDiagram={t => setDiagramTicket(t)}
               onCoverage={t => setCoverageTicket(t)}
               onLabelsChanged={load}
+              onCascade={handleApplyToChildren}
             />
           )}
         </div>
@@ -4794,6 +5057,7 @@ const KanbanPage = () => {
             tickets={tickets}
             testItems={testItems}
             users={users}
+            teams={teams}
             columns={colNames}
             versions={versions}
             onSave={handleSave}

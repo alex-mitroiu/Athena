@@ -61,6 +61,76 @@ const Chip = ({ count, color, label }) => count === 0 ? null : (
   </span>
 );
 
+// ─── Coverage Dashboard (TKT-S84WRE) ──────────────────────────────────────────
+// Flat, sortable (worst-first) per-plan rollup — same runStats() math the tree
+// view already computes per-plan, just hoisted above the fold instead of only
+// visible one expanded plan at a time.
+
+const CoverageDashboard = ({ planCoverage, projectStats, projectPct, onOpenPlan }) => (
+  <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
+      padding: "16px 20px", display: "flex", alignItems: "center", gap: 20 }}>
+      <div>
+        <div style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.textMuted,
+          textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 4 }}>Overall Pass Rate</div>
+        <div style={{ fontFamily: T.head || T.body, fontSize: 26, fontWeight: 800,
+          color: projectPct === 100 ? JIRA_COLOR.Pass : T.text }}>
+          {projectPct != null ? `${projectPct}%` : "—"}
+        </div>
+      </div>
+      <SegBar stats={projectStats} width={220} />
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <Chip count={projectStats.passed}  color={JIRA_COLOR.Pass}            label="Pass" />
+        <Chip count={projectStats.failed}  color={JIRA_COLOR.Fail}            label="Fail" />
+        <Chip count={projectStats.blocked} color={JIRA_COLOR.Blocked}         label="Blocked" />
+        <Chip count={projectStats.active}  color={JIRA_COLOR["In Progress"]}  label="In Progress" />
+        <Chip count={projectStats.pending} color={JIRA_COLOR["Not Executed"]} label="Not Executed" />
+      </div>
+    </div>
+
+    {planCoverage.length === 0 ? (
+      <div style={{ padding: "48px 0", textAlign: "center", fontSize: 13, color: T.textMuted, fontStyle: "italic" }}>
+        No test plans yet.
+      </div>
+    ) : (
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ display: "flex", alignItems: "center", padding: "8px 16px",
+          borderBottom: `1px solid ${T.border}`, background: T.bg }}>
+          <div style={{ flex: 1, fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.textMuted,
+            textTransform: "uppercase", letterSpacing: ".06em" }}>Plan</div>
+          <div style={{ width: 240, fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.textMuted,
+            textTransform: "uppercase", letterSpacing: ".06em" }}>Distribution</div>
+          <div style={{ width: 70, textAlign: "right", fontFamily: T.mono, fontSize: 10, fontWeight: 700,
+            color: T.textMuted, textTransform: "uppercase", letterSpacing: ".06em" }}>Pass %</div>
+        </div>
+        {planCoverage.map(({ plan, stats, pct, path }) => (
+          <div key={plan.id} onClick={() => onOpenPlan(plan.id)}
+            style={{ display: "flex", alignItems: "center", padding: "10px 16px", cursor: "pointer",
+              borderBottom: `1px solid ${T.border}22` }}
+            onMouseEnter={e => e.currentTarget.style.background = T.border + "10"}
+            onMouseLeave={e => e.currentTarget.style.background = "transparent"}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: T.text,
+                overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{plan.title}</div>
+              {path && <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted, marginTop: 1 }}>{path}</div>}
+            </div>
+            <div style={{ width: 240, display: "flex", alignItems: "center", gap: 8 }}>
+              <SegBar stats={stats} width={100} />
+              <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted, flexShrink: 0 }}>
+                {stats.total ? `${stats.passed}/${stats.total}` : "no cases"}
+              </span>
+            </div>
+            <div style={{ width: 70, textAlign: "right", fontFamily: T.mono, fontSize: 13, fontWeight: 700,
+              color: pct == null ? T.textMuted : pct === 100 ? JIRA_COLOR.Pass : pct >= 50 ? JIRA_COLOR["In Progress"] : JIRA_COLOR.Fail }}>
+              {pct != null ? `${pct}%` : "—"}
+            </div>
+          </div>
+        ))}
+      </div>
+    )}
+  </div>
+);
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function TestPlansPage() {
@@ -69,6 +139,7 @@ export default function TestPlansPage() {
   const [loading,     setLoading]     = useState(true);
   const [search,      setSearch]      = useState("");
   const [navSel,      setNavSel]      = useState({ type: "all" });
+  const [viewMode,    setViewMode]    = useState("tree"); // "tree" | "coverage"
   const [collapsed,   setCollapsed]   = useState({});   // right-panel expand/collapse
   const [navOpen,     setNavOpen]     = useState({});   // left-nav expand/collapse
   const [dragCase,    setDragCase]    = useState(null);
@@ -89,6 +160,30 @@ export default function TestPlansPage() {
   const testRuns    = useMemo(() => tickets.filter(t => t.type === "Test Run"),    [tickets]);
   const testCases   = useMemo(() => tickets.filter(t => t.type === "Test Case"),   [tickets]);
   const folderIds   = useMemo(() => new Set(testFolders.map(f => f.id)), [testFolders]);
+
+  // ── Coverage dashboard (TKT-S84WRE) ────────────────────────────────────────
+  // Project-wide rollup: per-plan pass/fail/blocked/active/not-run stats, same
+  // runStats() math PlanBlock already uses inline — just hoisted to one flat,
+  // sortable list across every plan instead of requiring the tree to be expanded
+  // plan-by-plan to see it.
+  const folderPath = useCallback(fid => {
+    const parts = [];
+    let cur = testFolders.find(f => f.id === fid);
+    while (cur) { parts.unshift(cur.title); cur = testFolders.find(f => f.id === cur.parentId); }
+    return parts.join(" / ");
+  }, [testFolders]);
+
+  const planCoverage = useMemo(() => testPlans.map(plan => {
+    const runs        = testRuns.filter(r => r.parentId === plan.id);
+    const directCases = testCases.filter(c => c.parentId === plan.id);
+    const allCases    = [...testCases.filter(c => runs.some(r => r.id === c.parentId)), ...directCases];
+    const stats       = runStats(allCases);
+    const pct         = stats.total > 0 ? Math.round(stats.passed / stats.total * 100) : null;
+    return { plan, stats, pct, path: folderPath(plan.parentId) };
+  }).sort((a, b) => (a.pct ?? -1) - (b.pct ?? -1)), [testPlans, testRuns, testCases, folderPath]);
+
+  const projectStats = useMemo(() => runStats(testCases), [testCases]);
+  const projectPct    = projectStats.total > 0 ? Math.round(projectStats.passed / projectStats.total * 100) : null;
 
   const q = search.trim().toLowerCase();
   const caseMatches = c => !q || c.id.toLowerCase().includes(q) || c.title.toLowerCase().includes(q);
@@ -440,11 +535,18 @@ export default function TestPlansPage() {
         {/* Toolbar */}
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0,
           padding: "10px 16px", borderBottom: `1px solid ${T.border}`, flexWrap: "wrap" }}>
-          <input value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search test cases…"
-            style={{ flex: 1, minWidth: 140, fontFamily: T.body, fontSize: 13, color: T.text,
-              background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7,
-              padding: "6px 10px", outline: "none" }} />
+          {viewMode === "tree" && (
+            <input value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search test cases…"
+              style={{ flex: 1, minWidth: 140, fontFamily: T.body, fontSize: 13, color: T.text,
+                background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7,
+                padding: "6px 10px", outline: "none" }} />
+          )}
+          {viewMode === "coverage" && (
+            <div style={{ flex: 1, fontFamily: T.body, fontSize: 13, fontWeight: 600, color: T.text }}>
+              Coverage — {testPlans.length} plan{testPlans.length !== 1 ? "s" : ""}
+            </div>
+          )}
           <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
             <Chip count={totalPass}    color={JIRA_COLOR.Pass}            label="Pass" />
             <Chip count={totalFail}    color={JIRA_COLOR.Fail}            label="Fail" />
@@ -455,16 +557,32 @@ export default function TestPlansPage() {
               <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted }}>/ {testCases.length}</span>
             )}
           </div>
+          <div style={{ display: "flex", borderRadius: 7, border: `1px solid ${T.border}`, overflow: "hidden", flexShrink: 0 }}>
+            {[["tree", "🗂 Tree"], ["coverage", "📊 Coverage"]].map(([key, label]) => (
+              <button key={key} onClick={() => setViewMode(key)}
+                style={{ padding: "6px 11px", border: "none", cursor: "pointer",
+                  fontFamily: T.body, fontSize: 12, fontWeight: viewMode === key ? 700 : 400,
+                  background: viewMode === key ? T.accent + "22" : "transparent",
+                  color: viewMode === key ? T.accent : T.textMuted }}>
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
 
-        {/* Plan tree */}
+        {/* Plan tree / Coverage dashboard */}
         <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px" }}>
-          {visiblePlans.length === 0 ? (
-            <div style={{ padding: "48px 0", textAlign: "center", fontSize: 13, color: T.textMuted, fontStyle: "italic" }}>
-              {navSel.type === "all" ? "No test plans yet." : "No plans in this selection."}
-            </div>
+          {viewMode === "tree" ? (
+            visiblePlans.length === 0 ? (
+              <div style={{ padding: "48px 0", textAlign: "center", fontSize: 13, color: T.textMuted, fontStyle: "italic" }}>
+                {navSel.type === "all" ? "No test plans yet." : "No plans in this selection."}
+              </div>
+            ) : (
+              visiblePlans.map(plan => <PlanBlock key={plan.id} plan={plan} />)
+            )
           ) : (
-            visiblePlans.map(plan => <PlanBlock key={plan.id} plan={plan} />)
+            <CoverageDashboard planCoverage={planCoverage} projectStats={projectStats} projectPct={projectPct}
+              onOpenPlan={id => { setViewMode("tree"); setNavSel({ type: "plan", id }); }} />
           )}
         </div>
       </div>
