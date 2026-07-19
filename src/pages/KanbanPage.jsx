@@ -2202,6 +2202,7 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
   const [links,      setLinks]      = useState(null);       // null = not yet fetched
   const [childLinks, setChildLinks] = useState(null);       // per-child link map
   const [cascadeOpen, setCascadeOpen] = useState(false);
+  const [estimateOpen, setEstimateOpen] = useState(false);
 
   const handleApproval = async action => {
     try {
@@ -2737,6 +2738,14 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
           {ticket.id}
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button type="button" onClick={() => setEstimateOpen(true)} title="Estimate Delivery"
+            style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6,
+              color: T.textMuted, cursor: "pointer", padding: "5px 10px", fontSize: 14,
+              fontFamily: T.body, lineHeight: 1, transition: "border-color .12s, color .12s, background .12s" }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = T.accent; e.currentTarget.style.color = T.accent; e.currentTarget.style.background = T.accentBg; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = T.border; e.currentTarget.style.color = T.textMuted; e.currentTarget.style.background = "none"; }}>
+            🎲
+          </button>
           {canEdit && (
             <ActionMenu items={[
               { icon: "✎", label: "Edit", onClick: onEdit },
@@ -2823,6 +2832,9 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
           onConfirm={async () => { await onCascade?.(ticket, children); setCascadeOpen(false); }}
           onClose={() => setCascadeOpen(false)} />
       )}
+      {estimateOpen && (
+        <EstimateModal ticket={ticket} onClose={() => setEstimateOpen(false)} />
+      )}
     </div>
   );
 };
@@ -2903,6 +2915,140 @@ const ApplyToChildrenModal = ({ epic, children, teams, onConfirm, onClose }) => 
           <Btn variant="primary" onClick={handleConfirm} disabled={applying || changingCount === 0}>
             {applying ? "Applying…" : `Apply to ${changingCount} ticket${changingCount !== 1 ? "s" : ""}`}
           </Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+// ─── Estimate Delivery (Monte Carlo) ───────────────────────────────────────────
+// No historical per-stage timing data exists yet, so this samples admin-calibrated
+// three-point (optimistic/likely/pessimistic) days-per-story-point assumptions via a
+// triangular distribution (routes/estimation.js) — directional, not a committed date.
+
+const EST_STAGE_LABELS = { integration: "Integration", testing: "Testing", patching: "Patching", release: "Release" };
+
+const EstimateHistogram = ({ histogram, p50, p80, p95 }) => {
+  const W = 460, H = 120, PAD = 8;
+  const min = histogram[0].from, max = histogram[histogram.length - 1].to;
+  const span = max - min || 1;
+  const maxCount = Math.max(...histogram.map(b => b.count), 1);
+  const x = v => PAD + ((v - min) / span) * (W - PAD * 2);
+  const barW = (W - PAD * 2) / histogram.length;
+
+  const marker = (value, color, label) => (
+    <g key={label}>
+      <line x1={x(value)} y1={14} x2={x(value)} y2={H} stroke={color} strokeWidth="1.5" strokeDasharray="3,3" />
+      <text x={x(value)} y={10} textAnchor="middle" fontSize="9" fill={color} fontFamily="monospace">{label}</text>
+    </g>
+  );
+
+  return (
+    <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 8, padding: "8px 6px" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+        {histogram.map((b, i) => {
+          const h = (b.count / maxCount) * (H - 14);
+          return (
+            <rect key={i} x={PAD + i * barW} y={H - h}
+              width={Math.max(barW - 1, 1)} height={h} fill={T.accent} opacity="0.55" />
+          );
+        })}
+        {marker(p50, T.accent, "P50")}
+        {marker(p80, T.warning, "P80")}
+        {marker(p95, T.danger, "P95")}
+      </svg>
+    </div>
+  );
+};
+
+const EstimateModal = ({ ticket, onClose }) => {
+  const [storyPoints, setStoryPoints] = useState(ticket.storyPoints ?? 1);
+  const [result, setResult] = useState(null);
+  const [running, setRunning] = useState(false);
+
+  const run = async () => {
+    const sp = parseFloat(storyPoints);
+    if (!Number.isFinite(sp) || sp <= 0) { toast.error("Story points must be a positive number"); return; }
+    setRunning(true);
+    try {
+      setResult(await api.estimation.run(sp));
+    } catch (e) { toast.error(e.message); }
+    finally { setRunning(false); }
+  };
+
+  const projectedDate = days => {
+    const d = new Date();
+    d.setDate(d.getDate() + Math.ceil(days));
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
+  };
+
+  return (
+    <Modal title={`🎲 Estimate Delivery — ${ticket.title}`} onClose={onClose} width={520}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.textMuted,
+              textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 5 }}>Story Points</div>
+            <input type="number" min="0.5" step="0.5" value={storyPoints}
+              onChange={e => setStoryPoints(e.target.value)}
+              style={{ width: "100%", padding: "8px 12px", borderRadius: 7, border: `1px solid ${T.border}`,
+                background: T.bg, fontFamily: T.body, fontSize: 13, color: T.text, outline: "none", boxSizing: "border-box" }} />
+          </div>
+          <Btn variant="primary" onClick={run} disabled={running}>{running ? "Simulating…" : "Run Simulation"}</Btn>
+        </div>
+
+        {!ticket.storyPoints && (
+          <div style={{ fontFamily: T.body, fontSize: 11.5, color: T.textMuted, fontStyle: "italic", marginTop: -10 }}>
+            This ticket has no story points set — defaulted to 1. Adjust above for a more realistic estimate.
+          </div>
+        )}
+
+        {result && (
+          <>
+            <div style={{ display: "flex", gap: 10 }}>
+              {[["P50", result.p50, T.accent], ["P80", result.p80, T.warning], ["P95", result.p95, T.danger]].map(([label, days, color]) => (
+                <div key={label} style={{ flex: 1, textAlign: "center", padding: "10px 6px", borderRadius: 8,
+                  background: T.bg, border: `1px solid ${T.border}` }}>
+                  <div style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color, letterSpacing: ".06em" }}>{label}</div>
+                  <div style={{ fontFamily: T.head, fontSize: 20, fontWeight: 800, color: T.text, margin: "3px 0" }}>
+                    {days.toFixed(1)}d
+                  </div>
+                  <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted }}>{projectedDate(days)}</div>
+                </div>
+              ))}
+            </div>
+
+            <EstimateHistogram histogram={result.histogram} p50={result.p50} p80={result.p80} p95={result.p95} />
+
+            <div>
+              <div style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.textMuted,
+                textTransform: "uppercase", letterSpacing: ".08em", marginBottom: 8 }}>Per-Stage Breakdown</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {Object.entries(result.stageAverages).map(([stage, days]) => {
+                  const pct = Math.round((days / result.mean) * 100);
+                  return (
+                    <div key={stage} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <span style={{ width: 80, fontFamily: T.body, fontSize: 12, color: T.text, flexShrink: 0 }}>
+                        {EST_STAGE_LABELS[stage] || stage}
+                      </span>
+                      <div style={{ flex: 1, height: 8, borderRadius: 4, background: T.bg, overflow: "hidden", border: `1px solid ${T.border}` }}>
+                        <div style={{ height: "100%", width: `${pct}%`, background: T.accent, borderRadius: 4 }} />
+                      </div>
+                      <span style={{ width: 46, textAlign: "right", fontFamily: T.mono, fontSize: 11, color: T.textMuted, flexShrink: 0 }}>
+                        {days.toFixed(1)}d
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </>
+        )}
+
+        <div style={{ fontFamily: T.body, fontSize: 11, color: T.textMuted, lineHeight: 1.5 }}>
+          Simulates 10,000 runs through Integration → Testing → Patching → Release using
+          admin-configured day-per-point assumptions (tune these under Application Settings).
+          Calendar days, not business days — treat this as directional, not a committed date.
         </div>
       </div>
     </Modal>

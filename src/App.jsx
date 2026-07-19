@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { T, applyTheme } from "./tokens";
 import { toast } from "./toast";
 import ToastContainer from "./components/primitives/ToastContainer";
@@ -17,10 +17,27 @@ import UsersPage      from "./pages/UsersPage";
 import TeamsPage      from "./pages/TeamsPage";
 import TraceabilityPage from "./pages/TraceabilityPage";
 import UserManualPage from "./pages/UserManualPage";
+import SettingsPage   from "./pages/SettingsPage";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
 const THEME_KEY = "athena_theme";
+
+// ─── Top header — breadcrumb titles per page ───────────────────────────────────
+
+const PAGE_TITLES = {
+  dashboard: "Dashboard",
+  kanban: "Integration Board",
+  releases: "Releases",
+  "test-plans": "Test Plans",
+  "test-runs": "Test Runs",
+  "test-cases": "Test Cases",
+  traceability: "Traceability",
+  users: "Users",
+  teams: "Teams",
+  "user-manual": "User Manual",
+  settings: "Settings",
+};
 
 // ─── Notification Bell (TKT-RZRUER) ────────────────────────────────────────────
 // Polls every 30s for new assignment notifications. Self-contained popover — no
@@ -113,6 +130,141 @@ const NotificationBell = ({ onOpenTicket }) => {
         </>
       )}
     </div>
+  );
+};
+
+// ─── Theme toggle pill (used inside the header's avatar dropdown) ─────────────
+// Top-level, not nested inside App() — a component defined inside another
+// component's render body is a fresh function reference on every parent
+// re-render, which makes React unmount/remount it (losing its own state)
+// instead of just re-rendering it. That bug is exactly why this and Header
+// live here rather than inline.
+
+const ThemeToggle = ({ isDark, setIsDark }) => (
+  <button type="button" onClick={() => setIsDark(d => !d)}
+    title={isDark ? "Switch to Light mode" : "Switch to Dark mode"}
+    style={{ display: "flex", alignItems: "center", gap: 6,
+      background: "none", border: "none", cursor: "pointer", padding: "4px 0" }}>
+    <div style={{ width: 40, height: 22, borderRadius: 11, position: "relative",
+      background: isDark ? T.border : "#D1D1D6", transition: "background .25s", flexShrink: 0 }}>
+      <div style={{ position: "absolute", top: 2, left: isDark ? 20 : 2,
+        width: 18, height: 18, borderRadius: "50%", background: isDark ? T.accent : "#FFFFFF",
+        boxShadow: "0 1px 4px rgba(0,0,0,.35)", transition: "left .25s, background .25s",
+        display: "flex", alignItems: "center", justifyContent: "center", fontSize: 9 }}>
+        {isDark ? "🌙" : "☀️"}
+      </div>
+    </div>
+    <span style={{ fontFamily: T.body, fontSize: 11, color: T.textMuted, userSelect: "none" }}>
+      {isDark ? "Dark" : "Light"}
+    </span>
+  </button>
+);
+
+// ─── Top header — breadcrumb, notifications, user avatar + dropdown ──────────
+
+const Header = ({ page, setPage, user, isAdmin, activeRole, isDark, setIsDark, handleLogout }) => {
+  const [open, setOpen] = useState(false);
+  const menuRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const h = e => { if (menuRef.current && !menuRef.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, [open]);
+
+  const MenuItem = ({ icon, label, onClick }) => (
+    <button type="button" onClick={() => { setOpen(false); onClick(); }}
+      style={{ display: "flex", alignItems: "center", gap: 10, width: "100%",
+        padding: "8px 16px", background: "none", border: "none", textAlign: "left",
+        cursor: "pointer", borderRadius: 6 }}
+      onMouseEnter={e => { e.currentTarget.style.background = T.surfaceHover; }}
+      onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
+      <span style={{ fontSize: 14, width: 18, textAlign: "center", flexShrink: 0 }}>{icon}</span>
+      <span style={{ fontFamily: T.body, fontSize: 13, color: T.text, fontWeight: 500 }}>{label}</span>
+    </button>
+  );
+
+  const Divider = () => <div style={{ height: 1, background: T.border, margin: "4px 0", opacity: 0.5 }} />;
+
+  return (
+    <header style={{ height: 46, borderBottom: `1px solid ${T.border}`, background: T.surface,
+      flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between",
+      padding: "0 20px" }}>
+      {/* Breadcrumb */}
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontFamily: T.body, fontSize: 12, color: T.border }}>Athena</span>
+        <span style={{ fontFamily: T.mono, fontSize: 10, color: T.border }}>›</span>
+        <span style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: T.textMuted }}>
+          {PAGE_TITLES[page] || page}
+        </span>
+      </div>
+
+      {/* Actions */}
+      <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+        <button type="button" onClick={() => setPage("dashboard")} title="Home"
+          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 16,
+            padding: "4px 6px", lineHeight: 1, opacity: page === "dashboard" ? 1 : 0.55,
+            transition: "opacity .15s" }}
+          onMouseEnter={e => { e.currentTarget.style.opacity = 1; }}
+          onMouseLeave={e => { e.currentTarget.style.opacity = page === "dashboard" ? 1 : 0.55; }}>
+          🏠
+        </button>
+
+        <NotificationBell onOpenTicket={() => setPage("kanban")} />
+
+        <div ref={menuRef} style={{ position: "relative" }}>
+          <button type="button" onClick={() => setOpen(o => !o)} style={{
+            width: 32, height: 32, borderRadius: "50%", border: "none", background: T.accent,
+            cursor: "pointer", flexShrink: 0, display: "flex", alignItems: "center",
+            justifyContent: "center", fontFamily: T.head, fontSize: 14, fontWeight: 800,
+            color: "#fff", boxShadow: open ? `0 0 0 3px ${T.accent}44` : "none",
+            transition: "box-shadow .15s" }}>
+            {user.name?.[0]?.toUpperCase() || "?"}
+          </button>
+
+          {open && (
+            <div style={{ position: "absolute", right: 0, top: "calc(100% + 8px)", zIndex: 500,
+              background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12,
+              boxShadow: "0 12px 36px rgba(0,0,0,.35)", minWidth: 230, padding: 8 }}>
+              <div style={{ padding: "10px 16px 12px", display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{ width: 40, height: 40, borderRadius: "50%", background: T.accent,
+                  flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center",
+                  fontFamily: T.head, fontSize: 18, fontWeight: 800, color: "#fff" }}>
+                  {user.name?.[0]?.toUpperCase() || "?"}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontFamily: T.head, fontSize: 14, fontWeight: 700, color: T.text }}>
+                    {user.name}
+                  </div>
+                  <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted, marginTop: 2 }}>
+                    {activeRole}
+                  </div>
+                </div>
+              </div>
+
+              <Divider />
+
+              <div style={{ padding: "4px 16px 8px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontFamily: T.body, fontSize: 13, color: T.text, fontWeight: 500 }}>
+                  {isDark ? "🌙 Dark mode" : "☀️ Light mode"}
+                </span>
+                <ThemeToggle isDark={isDark} setIsDark={setIsDark} />
+              </div>
+
+              <Divider />
+
+              <MenuItem icon="📖" label="User Manual" onClick={() => setPage("user-manual")} />
+              {isAdmin && <MenuItem icon="⚙" label="Application Settings" onClick={() => setPage("settings")} />}
+
+              <Divider />
+
+              <MenuItem icon="🚪" label="Sign Out" onClick={handleLogout} />
+            </div>
+          )}
+        </div>
+      </div>
+    </header>
   );
 };
 
@@ -283,7 +435,6 @@ export default function App() {
               <div style={{ fontFamily: T.head, fontSize: 15, fontWeight: 800, color: T.text }}>Athena</div>
               <div style={{ fontFamily: T.mono, fontSize: 9, color: T.textMuted, letterSpacing: ".05em" }}>v{VERSION} · {CODENAME}</div>
             </div>
-            <NotificationBell onOpenTicket={() => setPage("kanban")} />
           </div>
 
           {/* Nav */}
@@ -300,59 +451,26 @@ export default function App() {
             {isAdmin && nb("users", "👤", "Users")}
             {isAdmin && nb("teams", "👥", "Teams")}
           </nav>
-
-          {/* Footer */}
-          <div style={{ padding: "10px 10px 12px", borderTop: `1px solid ${T.border}`,
-            display: "flex", flexDirection: "column", gap: 8 }}>
-            {/* User chip */}
-            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px",
-              borderRadius: 7, background: T.surface }}>
-              <div style={{ width: 28, height: 28, borderRadius: "50%", background: T.accent,
-                color: "#fff", fontFamily: T.mono, fontSize: 12, fontWeight: 700,
-                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                {user.name?.[0]?.toUpperCase() ?? "?"}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontFamily: T.body, fontSize: 12, fontWeight: 600, color: T.text,
-                  overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {user.name}
-                </div>
-                <div style={{ fontFamily: T.mono, fontSize: 9, color: T.textMuted }}>{activeRole}</div>
-              </div>
-            </div>
-            {/* Controls row */}
-            <div style={{ display: "flex", gap: 6 }}>
-              <button onClick={() => setIsDark(d => !d)}
-                title="Toggle theme"
-                style={{ flex: 1, padding: "5px 0", borderRadius: 6, border: `1px solid ${T.border}`,
-                  background: "transparent", color: T.textMuted, cursor: "pointer",
-                  fontFamily: T.body, fontSize: 12 }}>
-                {isDark ? "☀ Light" : "☾ Dark"}
-              </button>
-              <button onClick={handleLogout}
-                style={{ flex: 1, padding: "5px 0", borderRadius: 6, border: `1px solid ${T.border}`,
-                  background: "transparent", color: T.textMuted, cursor: "pointer",
-                  fontFamily: T.body, fontSize: 12 }}>
-                Sign out
-              </button>
-            </div>
-          </div>
         </div>
 
-        {/* ── Main ── */}
-        <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "0 20px" }}>
-          {page === "dashboard"    && <DashboardPage />}
-          {page === "kanban"       && <KanbanPage />}
-          {page === "releases"     && <ReleasesPage />}
-          {page === "test-plans"   && <TestPlansPage />}
-          {page === "test-runs"    && <TestRunsPage />}
-          {page === "test-cases"   && <TestCasesPage />}
-          {page === "traceability" && <TraceabilityPage />}
-          {page === "users"        && isAdmin && <UsersPage />}
-          {page === "teams"        && isAdmin && <TeamsPage />}
-          {page === "user-manual"  && <UserManualPage />}
-        </main>
-
+        {/* ── Header + Main ── */}
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+          <Header page={page} setPage={setPage} user={user} isAdmin={isAdmin}
+            activeRole={activeRole} isDark={isDark} setIsDark={setIsDark} handleLogout={handleLogout} />
+          <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "0 20px" }}>
+            {page === "dashboard"    && <DashboardPage />}
+            {page === "kanban"       && <KanbanPage />}
+            {page === "releases"     && <ReleasesPage />}
+            {page === "test-plans"   && <TestPlansPage />}
+            {page === "test-runs"    && <TestRunsPage />}
+            {page === "test-cases"   && <TestCasesPage />}
+            {page === "traceability" && <TraceabilityPage />}
+            {page === "users"        && isAdmin && <UsersPage />}
+            {page === "teams"        && isAdmin && <TeamsPage />}
+            {page === "user-manual"  && <UserManualPage />}
+            {page === "settings"     && isAdmin && <SettingsPage />}
+          </main>
+        </div>
       </div>
 
       {/* ── Footer ── */}

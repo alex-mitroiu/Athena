@@ -171,6 +171,16 @@ export const api = {
     get:    (id)               => req("GET",  `/baselines/${id}`),
     remove: (id)               => req("DELETE", `/baselines/${id}`),
   },
+
+  settings: {
+    get:    ()     => req("GET", "/settings"),
+    update: (data) => req("PUT", "/settings", data),
+  },
+
+  estimation: {
+    getConfig: ()            => req("GET",  "/estimation/config"),
+    run:       (storyPoints) => req("POST", "/estimation/run", { storyPoints }),
+  },
 };
 
 // Aliases — KanbanPage uses api.kbVersions; ReleasesPage uses api.projects

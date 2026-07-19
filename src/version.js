@@ -1,8 +1,14 @@
-export const VERSION  = "0.5.0";
+export const VERSION  = "0.6.0";
 export const BUILD    = "2026-07-19";
 export const CODENAME = "Genesis";
 
 export const CHANGELOG = [
+  {
+    version:  "0.6.0",
+    date:     "2026-07-19",
+    codename: "Genesis",
+    summary:  "Top header on every page — breadcrumb, relocated notification bell, and a user-avatar dropdown (profile, theme toggle, User Manual, Sign Out). Azure AD / Entra ID SSO — a real, admin-configurable switch between Microsoft sign-in and local login (new Application Settings page), replacing the permanent stub; local email/password always remains available as a fallback. Delivery Estimation (Monte Carlo) — a new 🎲 action on any ticket runs 10,000 simulated passes through Integration/Testing/Patching/Release using admin-calibrated three-point (optimistic/likely/pessimistic) day-per-story-point assumptions, since no historical per-stage timing data exists yet to derive real distributions from — returns P50/P80/P95 day estimates, projected calendar dates, a histogram, and a per-stage breakdown. Estimates are directional (calendar days, not business days) and meant to be tuned as real delivery experience accumulates, not treated as calibrated from day one.",
+  },
   {
     version:  "0.5.0",
     date:     "2026-07-19",

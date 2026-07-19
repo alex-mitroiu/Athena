@@ -7,6 +7,7 @@ const { WebSocketServer } = require("ws");
 const { DatabaseSync }    = require("node:sqlite");
 const bcrypt = require("bcryptjs");
 const jwt    = require("jsonwebtoken");
+const crypto = require("crypto");
 
 const PORT       = process.env.PORT       || 3001;
 const JWT_SECRET = process.env.JWT_SECRET || "athena-dev-secret-do-not-use-in-prod";
@@ -255,7 +256,28 @@ db.exec(`
     created_at TEXT NOT NULL,
     UNIQUE(team_id, user_id)
   );
+
+  CREATE TABLE IF NOT EXISTS app_settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
 `);
+
+// Azure AD SSO — seeded once via INSERT OR IGNORE so a saved value is never clobbered.
+for (const [k, v] of [
+  ["sso_enabled", "0"], ["sso_tenant_id", ""], ["sso_client_id", ""],
+  ["sso_client_secret", ""], ["sso_redirect_uri", ""],
+  ["sso_default_role", "operator"], ["sso_frontend_url", "http://localhost:5173"],
+]) db.prepare("INSERT OR IGNORE INTO app_settings (key,value) VALUES (?,?)").run(k, v);
+
+// Delivery estimation (Monte Carlo) — admin-calibrated days-per-story-point, since no
+// historical per-stage timing data exists yet to derive these from (see routes/estimation.js).
+for (const [k, v] of [
+  ["est_integration_opt", "0.5"], ["est_integration_likely", "1"],   ["est_integration_pess", "3"],
+  ["est_testing_opt",     "0.5"], ["est_testing_likely",     "1.5"], ["est_testing_pess",     "3"],
+  ["est_patching_opt",    "0.25"],["est_patching_likely",    "1"],   ["est_patching_pess",    "2"],
+  ["est_release_opt",     "0.25"],["est_release_likely",     "0.5"], ["est_release_pess",     "1.5"],
+]) db.prepare("INSERT OR IGNORE INTO app_settings (key,value) VALUES (?,?)").run(k, v);
 
 // ─── Incremental migrations (existing DBs — CREATE TABLE IF NOT EXISTS above only helps fresh ones) ──
 try { db.exec("ALTER TABLE tickets ADD COLUMN story_points INTEGER DEFAULT NULL"); } catch {}
@@ -483,6 +505,24 @@ wss.on("connection", ws => {
   ws.on("close",  () => {});
 });
 
+// ─── App settings + SSO (TKT: Azure AD / local login switch) ─────────────────
+
+const getSettings = (prefix) => {
+  try {
+    const rows = prefix
+      ? db.prepare("SELECT key, value FROM app_settings WHERE key LIKE ?").all(prefix + "%")
+      : db.prepare("SELECT key, value FROM app_settings").all();
+    return Object.fromEntries(rows.map(r => [r.key, r.value]));
+  } catch { return {}; }
+};
+
+// In-memory OAuth2 "state" nonce store (CSRF protection), 5-minute TTL.
+const ssoNonces = new Map();
+setInterval(() => {
+  const cutoff = Date.now() - 5 * 60 * 1000;
+  for (const [k, v] of ssoNonces) if (v.ts < cutoff) ssoNonces.delete(k);
+}, 60_000);
+
 // ─── Shared context ────────────────────────────────────────────────────────────
 
 const ctx = {
@@ -497,6 +537,7 @@ const ctx = {
   mapDashboardWidget, mapWorkLog, mapBaseline, mapBaselineTicket,
   bcrypt, jwt, JWT_SECRET,
   fs, path, UPLOADS_DIR,
+  getSettings,
 };
 
 // ─── Routes ───────────────────────────────────────────────────────────────────
@@ -505,6 +546,8 @@ require("./routes/kanban")(app, ctx);
 require("./routes/teams")(app, ctx);
 require("./routes/extras")(app, ctx);
 require("./routes/testcases")(app, ctx);
+require("./routes/settings")(app, ctx);
+require("./routes/estimation")(app, ctx);
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
 
@@ -553,7 +596,108 @@ app.get("/api/auth/me", auth(), (req, res) => {
 
 app.post("/api/auth/logout", (req, res) => ok(res, { ok: true }));
 
-app.get("/api/auth/sso/config", (req, res) => ok(res, { enabled: false }));
+app.get("/api/auth/sso/config", (req, res) => {
+  const s = getSettings();
+  ok(res, {
+    enabled:  s.sso_enabled === '1',
+    tenantId: s.sso_tenant_id || '',
+    clientId: s.sso_client_id || '',
+  });
+});
+
+app.get("/api/auth/sso/init", (req, res) => {
+  const s = getSettings();
+  if (s.sso_enabled !== '1') return err(res, "SSO not enabled", 404);
+  const { sso_tenant_id: tenantId, sso_client_id: clientId, sso_redirect_uri: redirectUri } = s;
+  if (!tenantId || !clientId || !redirectUri)
+    return err(res, "SSO not configured — set tenant ID, client ID, and redirect URI in Settings", 500);
+
+  const state = crypto.randomBytes(16).toString("hex");
+  ssoNonces.set(state, { ts: Date.now() });
+
+  const params = new URLSearchParams({
+    client_id:     clientId,
+    response_type: "code",
+    redirect_uri:  redirectUri,
+    response_mode: "query",
+    scope:         "openid email profile",
+    state,
+  });
+  res.redirect(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params}`);
+});
+
+app.get("/api/auth/sso/callback", async (req, res) => {
+  const s = getSettings();
+  if (s.sso_enabled !== '1') return err(res, "SSO not enabled", 404);
+
+  const { code, state, error: oauthError } = req.query;
+  if (oauthError) return err(res, `SSO error: ${oauthError}`, 400);
+  if (!code || !state) return err(res, "Missing code or state", 400);
+  if (!ssoNonces.has(state)) return err(res, "Invalid or expired state", 400);
+  ssoNonces.delete(state);
+
+  const {
+    sso_tenant_id: tenantId, sso_client_id: clientId,
+    sso_client_secret: clientSecret, sso_redirect_uri: redirectUri,
+    sso_default_role: defaultRole = 'operator',
+    sso_frontend_url: frontendUrl = 'http://localhost:5173',
+  } = s;
+
+  try {
+    const tokenRes = await fetch(
+      `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`,
+      {
+        method:  "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body:    new URLSearchParams({
+          client_id: clientId, client_secret: clientSecret,
+          code, redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }),
+        signal: AbortSignal.timeout(10_000),
+      }
+    );
+    if (!tokenRes.ok) throw new Error(`Token exchange failed: ${tokenRes.status}`);
+    const tokens = await tokenRes.json();
+
+    const userRes = await fetch("https://graph.microsoft.com/oidc/userinfo", {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+      signal:  AbortSignal.timeout(8_000),
+    });
+    if (!userRes.ok) throw new Error("Failed to fetch user info");
+    const profile = await userRes.json();
+
+    const email = (profile.email || profile.preferred_username || '').toLowerCase().trim();
+    const name  = profile.name || profile.given_name || email;
+    if (!email) throw new Error("No email in SSO profile");
+
+    let user = db.prepare("SELECT * FROM users WHERE email=?").get(email);
+    if (!user) {
+      const id    = `USR-${uid()}`;
+      const roles = [VALID_ROLES.includes(defaultRole) ? defaultRole : 'operator'];
+      const primary = primaryRoleSV(roles);
+      db.prepare(`INSERT INTO users (id,email,name,password_hash,role,roles,is_active,created_at)
+        VALUES (?,?,?,?,?,?,1,datetime('now'))`)
+        .run(id, email, name, '', primary, JSON.stringify(roles));
+      user = db.prepare("SELECT * FROM users WHERE id=?").get(id);
+    }
+
+    if (!user.is_active) return res.redirect(`${frontendUrl}?sso_error=${encodeURIComponent("Account deactivated")}`);
+
+    db.prepare("UPDATE users SET last_login=datetime('now') WHERE id=?").run(user.id);
+
+    const roles = parseUserRoles(user);
+    const token = jwt.sign(
+      { id: user.id, email: user.email, name: user.name, role: user.role, roles, sso: true },
+      JWT_SECRET, { expiresIn: "8h" }
+    );
+
+    res.redirect(`${frontendUrl}?sso_token=${encodeURIComponent(token)}`);
+  } catch (e) {
+    console.error("SSO callback error:", e.message);
+    res.redirect(`${s.sso_frontend_url || 'http://localhost:5173'}?sso_error=${encodeURIComponent(e.message)}`);
+  }
+});
 
 // ── Users ─────────────────────────────────────────────────────────────────────
 
