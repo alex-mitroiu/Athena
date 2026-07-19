@@ -261,6 +261,31 @@ db.exec(`
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS ticket_status_history (
+    id         TEXT PRIMARY KEY,
+    ticket_id  TEXT NOT NULL,
+    from_status TEXT DEFAULT NULL,
+    to_status  TEXT NOT NULL,
+    changed_by TEXT DEFAULT '',
+    changed_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS ticket_watchers (
+    id         TEXT PRIMARY KEY,
+    ticket_id  TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(ticket_id, user_id)
+  );
+
+  CREATE TABLE IF NOT EXISTS project_members (
+    id         TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    user_id    TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(project_id, user_id)
+  );
 `);
 
 // Azure AD SSO — seeded once via INSERT OR IGNORE so a saved value is never clobbered.
@@ -294,6 +319,17 @@ try { db.exec("ALTER TABLE tickets ADD COLUMN sprint_id TEXT DEFAULT NULL"); } c
 try { db.exec("ALTER TABLE tickets ADD COLUMN approval_status TEXT DEFAULT NULL"); } catch {}
 try { db.exec("ALTER TABLE tickets ADD COLUMN approved_by TEXT DEFAULT ''"); } catch {}
 try { db.exec("ALTER TABLE tickets ADD COLUMN approved_at TEXT DEFAULT NULL"); } catch {}
+
+// Project access control (MVP) — backfill every existing user into every existing
+// project so this ships as a visibility narrowing for NEW projects going forward,
+// not a retroactive lockout for anyone who already had access to everything.
+{
+  const allUsers = db.prepare("SELECT id FROM users").all();
+  const allProjects = db.prepare("SELECT id FROM kb_projects").all();
+  const insertMember = db.prepare("INSERT OR IGNORE INTO project_members (id,project_id,user_id,created_at) VALUES (?,?,?,?)");
+  const backfillNow = new Date().toISOString();
+  for (const p of allProjects) for (const u of allUsers) insertMember.run(`PM-${uid()}`, p.id, u.id, backfillNow);
+}
 
 // ─── One-time migration: move test artifacts out of tickets into test_items ────
 {
@@ -388,6 +424,31 @@ function requireRole(roles) {
   };
 }
 
+// ─── Project access control (MVP) ──────────────────────────────────────────────
+// Binary membership: a user is either in a project or not. Capabilities within an
+// accessible project still come from the existing global role (admin/operator/
+// viewer) — membership only gates WHICH projects a user can see at all. Admins
+// bypass membership entirely, matching their existing superuser status elsewhere.
+
+const isAdminUser = user => (Array.isArray(user.roles) ? user.roles : [user.role]).includes("admin");
+
+const isProjectMember = (projectId, userId) =>
+  !!db.prepare("SELECT 1 FROM project_members WHERE project_id=? AND user_id=?").get(projectId, userId);
+
+// null = unrestricted (admin); otherwise the array of project ids this user can see.
+const accessibleProjectIds = user => {
+  if (isAdminUser(user)) return null;
+  return db.prepare("SELECT project_id FROM project_members WHERE user_id=?").all(user.id).map(r => r.project_id);
+};
+
+function requireProjectAccess(paramName = "id") {
+  return (req, res, next) => {
+    if (isAdminUser(req.user)) return next();
+    if (isProjectMember(req.params[paramName], req.user.id)) return next();
+    err(res, "Forbidden — not a member of this project", 403);
+  };
+}
+
 // Global auth guard — exempt /api/auth/* and /api/health
 app.use("/api", (req, res, next) =>
   req.path.startsWith("/auth/") || req.path === "/health" ? next() : auth()(req, res, next)
@@ -474,6 +535,10 @@ const mapWorkLog = r => ({ id: r.id, ticketId: r.ticket_id, userId: r.user_id, u
 const mapBaseline = r => ({ id: r.id, projectId: r.project_id, name: r.name, description: r.description || "", createdBy: r.created_by || "", createdAt: r.created_at });
 const mapBaselineTicket = r => ({ id: r.id, baselineId: r.baseline_id, ticketId: r.ticket_id, title: r.title, type: r.type, status: r.status, priority: r.priority, storyPoints: r.story_points ?? null, assigneeName: r.assignee_name || "" });
 
+const mapStatusHistory = r => ({ id: r.id, ticketId: r.ticket_id, fromStatus: r.from_status || null, toStatus: r.to_status, changedBy: r.changed_by || "", changedByName: r.changed_by_name || null, changedAt: r.changed_at });
+const mapWatcher = r => ({ id: r.id, ticketId: r.ticket_id, userId: r.user_id, userName: r.user_name || null, createdAt: r.created_at });
+const mapProjectMember = r => ({ id: r.id, projectId: r.project_id, userId: r.user_id, userName: r.user_name || null, userEmail: r.user_email || null, createdAt: r.created_at });
+
 const mapKbProject  = r => ({ id: r.id, name: r.name, key: r.key, color: r.color || "#6366f1", description: r.description || "", createdAt: r.created_at });
 const mapKbVersion  = r => ({ id: r.id, projectId: r.project_id, name: r.name, description: r.description || "", status: r.status || "Planning", releaseDate: r.release_date || null, createdAt: r.created_at });
 const mapKbColumn   = r => ({ id: r.id, projectId: r.project_id, name: r.name, position: r.position ?? 0, color: r.color || "#6366f1", wipLimit: r.wip_limit ?? null, createdAt: r.created_at });
@@ -528,6 +593,7 @@ setInterval(() => {
 const ctx = {
   db, uid, ok, err, isUniqueViolation,
   auth, requireRole, broadcast,
+  isProjectMember, accessibleProjectIds, requireProjectAccess, isAdminUser,
   mapTicket, mapTicketLink, inverseLinkLabel,
   mapTestItem, mapTestCaseLink,
   mapKbProject, mapKbVersion, mapKbColumn,
@@ -535,6 +601,7 @@ const ctx = {
   mapTeam,
   mapSprint, mapSprintSnapshot, mapSavedFilter, mapTestDataRow, mapNotification,
   mapDashboardWidget, mapWorkLog, mapBaseline, mapBaselineTicket,
+  mapStatusHistory, mapWatcher, mapProjectMember,
   bcrypt, jwt, JWT_SECRET,
   fs, path, UPLOADS_DIR,
   getSettings,

@@ -5,6 +5,7 @@ import { useAuth } from "../AuthContext";
 import { toast } from "../toast";
 import Spinner from "../components/primitives/Spinner";
 import Badge from "../components/primitives/Badge";
+import { ConfirmModal } from "../components/primitives/Modal";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -189,6 +190,7 @@ export default function ReleasesPage() {
   const [selVer,    setSelVer]    = useState(null);
   const [loading,   setLoading]   = useState(true);
   const [modal,     setModal]     = useState(null); // null | "new" | version-object
+  const [deleteTarget, setDeleteTarget] = useState(null);
 
   // ── Load ────────────────────────────────────────────────────────────────────
 
@@ -242,7 +244,6 @@ export default function ReleasesPage() {
   };
 
   const handleDelete = async (ver) => {
-    if (!window.confirm(`Delete version "${ver.name}"? Tickets will become unversioned.`)) return;
     try {
       await api.versions.remove(ver.id);
       const next = versions.filter(v => v.id !== ver.id);
@@ -250,6 +251,7 @@ export default function ReleasesPage() {
       setSelVer(next[0] || null);
       toast.success("Version deleted");
     } catch { toast.error("Failed to delete version"); }
+    finally { setDeleteTarget(null); }
   };
 
   // ── Derived ─────────────────────────────────────────────────────────────────
@@ -433,7 +435,7 @@ export default function ReleasesPage() {
                         style={{ fontFamily: T.body, fontSize: 12, padding: "5px 12px",
                           borderRadius: 7, border: `1px solid ${T.border}`, background: "transparent",
                           color: T.text, cursor: "pointer" }}>✎ Edit</button>
-                      <button onClick={() => handleDelete(selVer)}
+                      <button onClick={() => setDeleteTarget(selVer)}
                         style={{ fontFamily: T.body, fontSize: 12, padding: "5px 12px",
                           borderRadius: 7, border: `1px solid ${T.danger}44`, background: "transparent",
                           color: T.danger, cursor: "pointer" }}>✕ Delete</button>
@@ -493,6 +495,13 @@ export default function ReleasesPage() {
           projectId={projId}
           onSave={handleSaveVersion}
           onCancel={() => setModal(null)}
+        />
+      )}
+      {deleteTarget && (
+        <ConfirmModal
+          message={`Delete version "${deleteTarget.name}"? Tickets will become unversioned.`}
+          onConfirm={() => handleDelete(deleteTarget)}
+          onCancel={() => setDeleteTarget(null)}
         />
       )}
     </>

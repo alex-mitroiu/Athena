@@ -1,7 +1,8 @@
 "use strict";
 
 module.exports = function testCasesRoutes(app, ctx) {
-  const { db, ok, err, uid, auth, requireRole, mapTestItem, mapTestCaseLink, mapTestDataRow } = ctx;
+  const { db, ok, err, uid, auth, requireRole, mapTestItem, mapTestCaseLink, mapTestDataRow,
+          isProjectMember, accessibleProjectIds, isAdminUser } = ctx;
 
   const write = requireRole(["operator", "admin"]);
 
@@ -36,9 +37,21 @@ module.exports = function testCasesRoutes(app, ctx) {
 
   app.get("/api/test-items", auth(), (req, res) => {
     const { projectId } = req.query;
+    if (projectId && !isAdminUser(req.user) && !isProjectMember(projectId, req.user.id))
+      return err(res, "Forbidden — not a member of this project", 403);
+
     let query  = `${TEST_ITEM_JOIN} WHERE 1=1`;
     const params = [];
-    if (projectId) { query += " AND t.project_id=?"; params.push(projectId); }
+    if (projectId) {
+      query += " AND t.project_id=?"; params.push(projectId);
+    } else {
+      const ids = accessibleProjectIds(req.user);
+      if (ids !== null) {
+        if (ids.length === 0) return ok(res, []);
+        query += ` AND t.project_id IN (${ids.map(() => "?").join(",")})`;
+        params.push(...ids);
+      }
+    }
     query += " ORDER BY t.status, t.position, t.created_at";
     ok(res, db.prepare(query).all(...params).map(mapTestItem));
   });

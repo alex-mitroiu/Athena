@@ -3,9 +3,13 @@
 module.exports = function kanbanRoutes(app, ctx) {
   const { db, ok, err, uid, auth, requireRole, broadcast,
           mapTicket, mapTicketLink, inverseLinkLabel, mapTicketComment, mapTicketAttachment, mapTicketLabel,
-          mapKbProject, mapKbVersion, mapKbColumn, mapSprint, mapSprintSnapshot, mapNotification, fs, path, UPLOADS_DIR } = ctx;
+          mapKbProject, mapKbVersion, mapKbColumn, mapSprint, mapSprintSnapshot, mapNotification, fs, path, UPLOADS_DIR,
+          isProjectMember, accessibleProjectIds, requireProjectAccess, isAdminUser,
+          mapStatusHistory, mapWatcher, mapProjectMember } = ctx;
 
   const write = requireRole(["operator", "admin"]);
+  const manageMembers = requireRole(["admin"]);
+  const projectAccess = requireProjectAccess("id");
 
   // ─── Ticket helpers ───────────────────────────────────────────────────────
 
@@ -25,14 +29,61 @@ module.exports = function kanbanRoutes(app, ctx) {
       .run(`NTF-${uid()}`, assigneeId, "assigned", `You were assigned to "${ticketTitle}"`, ticketId, new Date().toISOString());
   };
 
+  // Notifies every watcher of a ticket except the person who just made the change.
+  const notifyWatchers = (ticketId, actingUserId, message) => {
+    const watchers = db.prepare("SELECT user_id FROM ticket_watchers WHERE ticket_id=? AND user_id!=?").all(ticketId, actingUserId);
+    const now = new Date().toISOString();
+    for (const w of watchers) {
+      db.prepare("INSERT INTO notifications (id,user_id,type,message,ticket_id,is_read,created_at) VALUES (?,?,?,?,?,0,?)")
+        .run(`NTF-${uid()}`, w.user_id, "watched", message, ticketId, now);
+    }
+  };
+
+  // Logs a real status transition (TKT-891SR2) — only when the status actually
+  // changed, never a no-op "moved to the same column" call.
+  const logStatusChange = (ticketId, fromStatus, toStatus, actingUserId) => {
+    if (fromStatus === toStatus) return;
+    db.prepare("INSERT INTO ticket_status_history (id,ticket_id,from_status,to_status,changed_by,changed_at) VALUES (?,?,?,?,?,?)")
+      .run(`TSH-${uid()}`, ticketId, fromStatus || null, toStatus, actingUserId || "", new Date().toISOString());
+  };
+
+  // Parses @Name mentions out of a comment body and notifies each matched user
+  // (case-insensitive full-name match against the users table).
+  const notifyMentions = (body, actingUserId, ticketId, ticketTitle) => {
+    const matches = [...body.matchAll(/@([A-Za-z][\w.'-]*(?:\s+[A-Za-z][\w.'-]*)?)/g)].map(m => m[1].trim());
+    if (matches.length === 0) return;
+    const users = db.prepare("SELECT id, name FROM users").all();
+    const now = new Date().toISOString();
+    const notified = new Set();
+    for (const name of matches) {
+      const user = users.find(u => u.name.toLowerCase() === name.toLowerCase());
+      if (!user || user.id === actingUserId || notified.has(user.id)) continue;
+      notified.add(user.id);
+      db.prepare("INSERT INTO notifications (id,user_id,type,message,ticket_id,is_read,created_at) VALUES (?,?,?,?,?,0,?)")
+        .run(`NTF-${uid()}`, user.id, "mentioned", `You were mentioned on "${ticketTitle}"`, ticketId, now);
+    }
+  };
+
   // ─── Tickets ──────────────────────────────────────────────────────────────
 
   app.get("/api/tickets", auth(), (req, res) => {
     const { projectId } = req.query;
+    if (projectId && !isAdminUser(req.user) && !isProjectMember(projectId, req.user.id))
+      return err(res, "Forbidden — not a member of this project", 403);
+
     let query  = `${TICKET_JOIN} WHERE 1=1`;
     const params = [];
     // Fix 1: no longer includes NULL project_id rows — standalone starts clean
-    if (projectId) { query += " AND t.project_id=?"; params.push(projectId); }
+    if (projectId) {
+      query += " AND t.project_id=?"; params.push(projectId);
+    } else {
+      const ids = accessibleProjectIds(req.user);
+      if (ids !== null) {
+        if (ids.length === 0) return ok(res, []);
+        query += ` AND t.project_id IN (${ids.map(() => "?").join(",")})`;
+        params.push(...ids);
+      }
+    }
     query += " ORDER BY t.status, t.position, t.created_at";
     const rows = db.prepare(query).all(...params);
     const labelsByTicket = {};
@@ -63,6 +114,7 @@ module.exports = function kanbanRoutes(app, ctx) {
            storyPoints === "" || storyPoints === null ? null : Number(storyPoints),
            JSON.stringify(customFields && typeof customFields === "object" ? customFields : {}));
     if (assigneeId) notifyAssignee(assigneeId, req.user.id, id, title);
+    logStatusChange(id, null, status, req.user.id);
     ok(res, mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(id)), 201);
   });
 
@@ -76,7 +128,8 @@ module.exports = function kanbanRoutes(app, ctx) {
     const nextPosByStatus = {};
     const updated = [];
     for (const id of ids) {
-      if (!db.prepare("SELECT id FROM tickets WHERE id=?").get(id)) continue;
+      const before = db.prepare("SELECT * FROM tickets WHERE id=?").get(id);
+      if (!before) continue;
       const sets = [], vals = [];
       for (const f of fields) {
         const value = patch[f];
@@ -93,7 +146,13 @@ module.exports = function kanbanRoutes(app, ctx) {
       vals.push(id);
       db.prepare(`UPDATE tickets SET ${sets.join(",")} WHERE id=?`).run(...vals);
       const row = db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(id);
-      if (fields.includes("assigneeId") && patch.assigneeId) notifyAssignee(patch.assigneeId, req.user.id, id, row.title);
+      if (fields.includes("assigneeId") && patch.assigneeId && patch.assigneeId !== before.assignee_id)
+        notifyAssignee(patch.assigneeId, req.user.id, id, row.title);
+      if (fields.includes("status")) {
+        logStatusChange(id, before.status, patch.status, req.user.id);
+        if (before.status !== patch.status)
+          notifyWatchers(id, req.user.id, `"${row.title}" moved from ${before.status} to ${patch.status}`);
+      }
       updated.push(mapTicket(row));
     }
     broadcast("tickets_bulk_updated", { tickets: updated });
@@ -142,7 +201,43 @@ module.exports = function kanbanRoutes(app, ctx) {
            req.params.id);
     if (info.changes === 0) return err(res, "Not found", 404);
     if (assigneeId && assigneeId !== existing.assignee_id) notifyAssignee(assigneeId, req.user.id, req.params.id, title);
+    if (status !== existing.status) {
+      logStatusChange(req.params.id, existing.status, status, req.user.id);
+      notifyWatchers(req.params.id, req.user.id, `"${title}" moved from ${existing.status} to ${status}`);
+    }
     ok(res, mapTicket(db.prepare(`${TICKET_JOIN} WHERE t.id=?`).get(req.params.id)));
+  });
+
+  app.get("/api/tickets/:id/status-history", auth(), (req, res) => {
+    const rows = db.prepare(`
+      SELECT h.*, u.name AS changed_by_name FROM ticket_status_history h
+      LEFT JOIN users u ON h.changed_by = u.id
+      WHERE h.ticket_id=? ORDER BY h.changed_at ASC
+    `).all(req.params.id);
+    ok(res, rows.map(mapStatusHistory));
+  });
+
+  // ─── Watchers ─────────────────────────────────────────────────────────────
+
+  app.get("/api/tickets/:id/watchers", auth(), (req, res) => {
+    const rows = db.prepare(`
+      SELECT w.*, u.name AS user_name FROM ticket_watchers w
+      LEFT JOIN users u ON w.user_id = u.id
+      WHERE w.ticket_id=? ORDER BY w.created_at ASC
+    `).all(req.params.id);
+    ok(res, rows.map(mapWatcher));
+  });
+
+  app.post("/api/tickets/:id/watch", auth(), (req, res) => {
+    if (!db.prepare("SELECT id FROM tickets WHERE id=?").get(req.params.id)) return err(res, "Ticket not found", 404);
+    db.prepare("INSERT OR IGNORE INTO ticket_watchers (id,ticket_id,user_id,created_at) VALUES (?,?,?,?)")
+      .run(`WCH-${uid()}`, req.params.id, req.user.id, new Date().toISOString());
+    ok(res, { watching: true });
+  });
+
+  app.delete("/api/tickets/:id/watch", auth(), (req, res) => {
+    db.prepare("DELETE FROM ticket_watchers WHERE ticket_id=? AND user_id=?").run(req.params.id, req.user.id);
+    ok(res, { watching: false });
   });
 
   app.delete("/api/tickets/:id", write, (req, res) => {
@@ -167,12 +262,15 @@ module.exports = function kanbanRoutes(app, ctx) {
   app.post("/api/tickets/:id/comments", write, (req, res) => {
     const { body } = req.body || {};
     if (!body || !body.trim()) return err(res, "body required");
-    if (!db.prepare("SELECT id FROM tickets WHERE id=?").get(req.params.id)) return err(res, "Ticket not found", 404);
+    const ticket = db.prepare("SELECT id, title FROM tickets WHERE id=?").get(req.params.id);
+    if (!ticket) return err(res, "Ticket not found", 404);
     const id  = `CMT-${uid()}`;
     const now = new Date().toISOString();
     db.prepare("INSERT INTO ticket_comments (id,ticket_id,author_id,body,created_at) VALUES (?,?,?,?,?)")
       .run(id, req.params.id, req.user.id, body.trim(), now);
     const comment = mapTicketComment(db.prepare(`${COMMENT_JOIN} WHERE c.id=?`).get(id));
+    notifyMentions(body, req.user.id, req.params.id, ticket.title);
+    notifyWatchers(req.params.id, req.user.id, `New comment on "${ticket.title}"`);
     broadcast("ticket_comment_added", { ticketId: req.params.id, comment });
     ok(res, comment, 201);
   });
@@ -305,7 +403,12 @@ module.exports = function kanbanRoutes(app, ctx) {
   // ─── Projects ─────────────────────────────────────────────────────────────
 
   app.get("/api/kb/projects", auth(), (req, res) => {
-    ok(res, db.prepare("SELECT * FROM kb_projects ORDER BY created_at ASC").all().map(mapKbProject));
+    const ids = accessibleProjectIds(req.user);
+    const rows = ids === null
+      ? db.prepare("SELECT * FROM kb_projects ORDER BY created_at ASC").all()
+      : ids.length === 0 ? []
+      : db.prepare(`SELECT * FROM kb_projects WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at ASC`).all(...ids);
+    ok(res, rows.map(mapKbProject));
   });
 
   app.post("/api/kb/projects", write, (req, res) => {
@@ -316,6 +419,8 @@ module.exports = function kanbanRoutes(app, ctx) {
     const keyVal = key.trim().toUpperCase() || name.slice(0, 4).toUpperCase();
     db.prepare("INSERT INTO kb_projects (id,name,key,color,description,created_at) VALUES (?,?,?,?,?,?)")
       .run(id, name, keyVal, color, description, now);
+    db.prepare("INSERT OR IGNORE INTO project_members (id,project_id,user_id,created_at) VALUES (?,?,?,?)")
+      .run(`PM-${uid()}`, id, req.user.id, now);
     const DEFAULT_COLUMNS = [
       { name: "Ready",           color: "#6366f1" },
       { name: "In Progress",     color: "#f59e0b" },
@@ -332,7 +437,7 @@ module.exports = function kanbanRoutes(app, ctx) {
     ok(res, mapKbProject(db.prepare("SELECT * FROM kb_projects WHERE id=?").get(id)), 201);
   });
 
-  app.put("/api/kb/projects/:id", write, (req, res) => {
+  app.put("/api/kb/projects/:id", write, projectAccess, (req, res) => {
     const existing = db.prepare("SELECT * FROM kb_projects WHERE id=?").get(req.params.id);
     if (!existing) return err(res, "Not found", 404);
     const { name = existing.name, key = existing.key, color = existing.color, description = existing.description } = req.body || {};
@@ -341,20 +446,50 @@ module.exports = function kanbanRoutes(app, ctx) {
     ok(res, mapKbProject(db.prepare("SELECT * FROM kb_projects WHERE id=?").get(req.params.id)));
   });
 
-  app.delete("/api/kb/projects/:id", write, (req, res) => {
+  app.delete("/api/kb/projects/:id", write, projectAccess, (req, res) => {
     if (db.prepare("SELECT COUNT(*) AS n FROM kb_projects").get().n <= 1)
       return err(res, "Cannot delete the last project");
     db.prepare("DELETE FROM kb_projects WHERE id=?").run(req.params.id);
+    db.prepare("DELETE FROM project_members WHERE project_id=?").run(req.params.id);
     ok(res, { deleted: req.params.id });
+  });
+
+  // ─── Project Members (access control MVP) ────────────────────────────────
+  // Admin-only to manage — membership decides which projects a user can see at
+  // all, so granting/revoking it is treated the same as the Users/Teams admin
+  // screens rather than something any project member can do to another.
+
+  app.get("/api/kb/projects/:id/members", manageMembers, (req, res) => {
+    const rows = db.prepare(`
+      SELECT m.*, u.name AS user_name, u.email AS user_email FROM project_members m
+      LEFT JOIN users u ON m.user_id = u.id
+      WHERE m.project_id=? ORDER BY u.name ASC
+    `).all(req.params.id);
+    ok(res, rows.map(mapProjectMember));
+  });
+
+  app.post("/api/kb/projects/:id/members", manageMembers, (req, res) => {
+    const { userId } = req.body || {};
+    if (!userId) return err(res, "userId required");
+    if (!db.prepare("SELECT id FROM kb_projects WHERE id=?").get(req.params.id)) return err(res, "Project not found", 404);
+    if (!db.prepare("SELECT id FROM users WHERE id=?").get(userId)) return err(res, "User not found", 404);
+    db.prepare("INSERT OR IGNORE INTO project_members (id,project_id,user_id,created_at) VALUES (?,?,?,?)")
+      .run(`PM-${uid()}`, req.params.id, userId, new Date().toISOString());
+    ok(res, { added: userId }, 201);
+  });
+
+  app.delete("/api/kb/projects/:id/members/:userId", manageMembers, (req, res) => {
+    db.prepare("DELETE FROM project_members WHERE project_id=? AND user_id=?").run(req.params.id, req.params.userId);
+    ok(res, { removed: req.params.userId });
   });
 
   // ─── Versions ─────────────────────────────────────────────────────────────
 
-  app.get("/api/kb/projects/:id/versions", auth(), (req, res) => {
+  app.get("/api/kb/projects/:id/versions", auth(), projectAccess, (req, res) => {
     ok(res, db.prepare("SELECT * FROM kb_versions WHERE project_id=? ORDER BY created_at ASC").all(req.params.id).map(mapKbVersion));
   });
 
-  app.post("/api/kb/projects/:id/versions", write, (req, res) => {
+  app.post("/api/kb/projects/:id/versions", write, projectAccess, (req, res) => {
     if (!db.prepare("SELECT id FROM kb_projects WHERE id=?").get(req.params.id)) return err(res, "Project not found", 404);
     const { name, description = "", status = "Planning", releaseDate = null } = req.body || {};
     if (!name) return err(res, "name required");
@@ -390,11 +525,11 @@ module.exports = function kanbanRoutes(app, ctx) {
 
   const DONE_STATUSES = new Set(["Done", "Ready to Deploy", "Released"]);
 
-  app.get("/api/kb/projects/:id/sprints", auth(), (req, res) => {
+  app.get("/api/kb/projects/:id/sprints", auth(), projectAccess, (req, res) => {
     ok(res, db.prepare("SELECT * FROM kb_sprints WHERE project_id=? ORDER BY created_at ASC").all(req.params.id).map(mapSprint));
   });
 
-  app.post("/api/kb/projects/:id/sprints", write, (req, res) => {
+  app.post("/api/kb/projects/:id/sprints", write, projectAccess, (req, res) => {
     if (!db.prepare("SELECT id FROM kb_projects WHERE id=?").get(req.params.id)) return err(res, "Project not found", 404);
     const { name, startDate = null, endDate = null, status = "Planning" } = req.body || {};
     if (!name) return err(res, "name required");
@@ -439,11 +574,11 @@ module.exports = function kanbanRoutes(app, ctx) {
 
   // ─── Columns ──────────────────────────────────────────────────────────────
 
-  app.get("/api/kb/projects/:id/columns", auth(), (req, res) => {
+  app.get("/api/kb/projects/:id/columns", auth(), projectAccess, (req, res) => {
     ok(res, db.prepare("SELECT * FROM kb_columns WHERE project_id=? ORDER BY position ASC").all(req.params.id).map(mapKbColumn));
   });
 
-  app.post("/api/kb/projects/:id/columns", write, (req, res) => {
+  app.post("/api/kb/projects/:id/columns", write, projectAccess, (req, res) => {
     if (!db.prepare("SELECT id FROM kb_projects WHERE id=?").get(req.params.id)) return err(res, "Project not found", 404);
     const { name, color = "#6366f1", wipLimit = null } = req.body || {};
     if (!name) return err(res, "name required");
@@ -463,7 +598,7 @@ module.exports = function kanbanRoutes(app, ctx) {
     ok(res, mapKbColumn(db.prepare("SELECT * FROM kb_columns WHERE id=?").get(req.params.id)));
   });
 
-  app.patch("/api/kb/projects/:id/columns", write, (req, res) => {
+  app.patch("/api/kb/projects/:id/columns", write, projectAccess, (req, res) => {
     const { order = [] } = req.body || {};
     for (let i = 0; i < order.length; i++) {
       db.prepare("UPDATE kb_columns SET position=? WHERE id=? AND project_id=?").run(i, order[i], req.params.id);

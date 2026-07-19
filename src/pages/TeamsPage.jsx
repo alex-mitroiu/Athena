@@ -4,6 +4,7 @@ import { api } from "../api";
 import { toast } from "../toast";
 import { Modal } from "../components/primitives/Modal";
 import Btn from "../components/primitives/Btn";
+import Spinner from "../components/primitives/Spinner";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -198,8 +199,9 @@ export default function TeamsPage() {
       </div>
 
       {loading ? (
-        <div style={{ padding: "40px 0", textAlign: "center", color: T.textMuted,
-          fontFamily: T.body, fontSize: 13 }}>Loading…</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 0" }}>
+          <Spinner size="md" />
+        </div>
       ) : (
         <div style={{ background: T.surface, border: `1px solid ${T.border}`,
           borderRadius: 10, overflow: "hidden" }}>

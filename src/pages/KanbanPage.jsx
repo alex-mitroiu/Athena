@@ -7,10 +7,12 @@ import { useAuth } from "../AuthContext";
 import { Modal, ConfirmModal } from "../components/primitives/Modal";
 import Btn from "../components/primitives/Btn";
 import Badge from "../components/primitives/Badge";
+import Spinner from "../components/primitives/Spinner";
 import ActionMenu from "../components/primitives/ActionMenu";
 import TestCaseStoryLinksPanel from "../components/shared/TestCaseStoryLinksPanel";
 import { Inp, Sel, Textarea } from "../components/primitives/Form";
 import { toast } from "../toast";
+import { downloadCSV } from "../csv";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -1087,6 +1089,46 @@ const TicketCommentsPanel = ({ ticketId }) => {
 // ─── Ticket Attachments Panel ─────────────────────────────────────────────────
 
 // ─── Time Tracking / Work Log (TKT-91OLB9) ────────────────────────────────────
+
+const TicketActivityPanel = ({ ticketId }) => {
+  const [history, setHistory] = useState(null); // null = loading
+
+  useEffect(() => {
+    api.tickets.statusHistory(ticketId).then(setHistory).catch(() => setHistory([]));
+  }, [ticketId]);
+
+  const sectionLbl = { fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+    textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 };
+  const fmtWhen = d => new Date(d).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+  if (history === null) return <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>Loading…</div>;
+  if (history.length === 0) return (
+    <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>No status changes recorded yet.</div>
+  );
+
+  return (
+    <div>
+      <div style={sectionLbl}>Activity</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {history.map(h => (
+          <div key={h.id} style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "8px 10px",
+            borderRadius: 7, background: T.bg, border: `1px solid ${T.border}` }}>
+            <span style={{ fontFamily: T.body, fontSize: 12, color: T.text, flex: 1 }}>
+              {h.fromStatus ? (
+                <>Moved <strong>{h.fromStatus}</strong> → <strong style={{ color: T.accent }}>{h.toStatus}</strong></>
+              ) : (
+                <>Created in <strong style={{ color: T.accent }}>{h.toStatus}</strong></>
+              )}
+            </span>
+            <span style={{ fontFamily: T.body, fontSize: 10.5, color: T.textMuted, whiteSpace: "nowrap" }}>
+              {h.changedByName || "Someone"} · {fmtWhen(h.changedAt)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 const TicketWorkLogPanel = ({ ticketId }) => {
   const { user, canEdit, isAdmin } = useAuth();
@@ -2196,13 +2238,29 @@ const TicketCard = ({ ticket, onEdit, onDelete, onMove, onPreview, onDiagram, on
 // ─── Ticket Preview Panel ─────────────────────────────────────────────────────
 
 const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams = [], onClose, onEdit, onMove, onDelete, onPreview, onDiagram, onCoverage, columns = COLUMNS, onLabelsChanged, onCascade, onTicketUpdated }) => {
-  const { canEdit } = useAuth();
+  const { user, canEdit } = useAuth();
   const [confirm,    setConfirm]    = useState(false);
   const [tab,        setTab]        = useState("overview"); // "overview" | "links" | "order" | "comments" | "files"
   const [links,      setLinks]      = useState(null);       // null = not yet fetched
   const [childLinks, setChildLinks] = useState(null);       // per-child link map
   const [cascadeOpen, setCascadeOpen] = useState(false);
   const [estimateOpen, setEstimateOpen] = useState(false);
+  const [watching,   setWatching]   = useState(false);
+  const [watcherCount, setWatcherCount] = useState(0);
+
+  useEffect(() => {
+    api.tickets.watchers(ticket.id).then(rows => {
+      setWatcherCount(rows.length);
+      setWatching(rows.some(w => w.userId === user?.id));
+    }).catch(() => {});
+  }, [ticket.id, user?.id]);
+
+  const toggleWatch = async () => {
+    try {
+      if (watching) { await api.tickets.unwatch(ticket.id); setWatching(false); setWatcherCount(c => Math.max(0, c - 1)); }
+      else { await api.tickets.watch(ticket.id); setWatching(true); setWatcherCount(c => c + 1); }
+    } catch (e) { toast.error(e.message); }
+  };
 
   const handleApproval = async action => {
     try {
@@ -2738,6 +2796,13 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
           {ticket.id}
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+          <button type="button" onClick={toggleWatch} title={watching ? "Stop watching" : "Watch this ticket"}
+            style={{ background: watching ? T.accentBg : "none", border: `1px solid ${watching ? T.accent + "66" : T.border}`,
+              borderRadius: 6, color: watching ? T.accent : T.textMuted, cursor: "pointer", padding: "5px 10px",
+              fontSize: 12, fontFamily: T.body, lineHeight: 1, display: "flex", alignItems: "center", gap: 4,
+              transition: "border-color .12s, color .12s, background .12s" }}>
+            👁{watcherCount > 0 && <span style={{ fontFamily: T.mono, fontSize: 10 }}>{watcherCount}</span>}
+          </button>
           <button type="button" onClick={() => setEstimateOpen(true)} title="Estimate Delivery"
             style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 6,
               color: T.textMuted, cursor: "pointer", padding: "5px 10px", fontSize: 14,
@@ -2779,6 +2844,7 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
         {tabBtn("comments", "💬 Comments")}
         {tabBtn("files", "📎 Files")}
         {tabBtn("time", "⏱ Time")}
+        {tabBtn("activity", "🕐 Activity")}
       </div>
 
       {/* Scrollable body */}
@@ -2790,6 +2856,7 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
         {tab === "comments" && <TicketCommentsPanel ticketId={ticket.id} />}
         {tab === "files"    && <TicketAttachmentsPanel ticketId={ticket.id} />}
         {tab === "time"     && <TicketWorkLogPanel ticketId={ticket.id} />}
+        {tab === "activity" && <TicketActivityPanel ticketId={ticket.id} />}
       </div>
 
       {/* Actions footer */}
@@ -3497,6 +3564,7 @@ const BmEditForm = ({ onSave, onCancel, saving, children }) => (
 // Tabbed manager for Projects, Columns, and Versions.
 
 const BoardManagerModal = ({ projects, currentProject, columns, versions, sprints, tickets, onClose, onRefresh, onProjectChange }) => {
+  const { isAdmin } = useAuth();
   const [tab,        setTab]        = useState("columns");
   const [editItem,   setEditItem]   = useState(null);   // item being edited or "new"
   const [form,       setForm]       = useState({});
@@ -3505,6 +3573,8 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
   const [dragOver,   setDragOver]   = useState(null);
   const [baselines,  setBaselines]  = useState([]);
   const [viewBaseline, setViewBaseline] = useState(null);
+  const [membersProjectId, setMembersProjectId] = useState(null);
+  const [pendingDelete, setPendingDelete] = useState(null); // { kind, id, message }
 
   useEffect(() => {
     if (currentProject) api.baselines.list(currentProject.id).then(setBaselines).catch(() => {});
@@ -3533,10 +3603,8 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
     finally { setSaving(false); }
   };
 
-  const deleteProject = async id => {
-    if (!window.confirm("Delete this project? Tickets in it will keep their project_id but the project will be gone.")) return;
-    try { await api.kbProjects.remove(id); onRefresh(); } catch (e) { toast.error(e.message); }
-  };
+  const deleteProject = id => setPendingDelete({ kind: "project", id,
+    message: "Delete this project? Tickets in it will keep their project_id but the project will be gone." });
 
   const saveColumn = async () => {
     if (!form.name?.trim() || !currentProject) return;
@@ -3549,10 +3617,8 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
     finally { setSaving(false); }
   };
 
-  const deleteColumn = async col => {
-    if (!window.confirm(`Delete column "${col.name}"? Tickets already in it keep their status value.`)) return;
-    try { await api.kbColumns.remove(col.id); onRefresh(); } catch (e) { toast.error(e.message); }
-  };
+  const deleteColumn = col => setPendingDelete({ kind: "column", id: col.id,
+    message: `Delete column "${col.name}"? Tickets already in it keep their status value.` });
 
   const saveVersion = async () => {
     if (!form.name?.trim() || !currentProject) return;
@@ -3565,10 +3631,8 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
     finally { setSaving(false); }
   };
 
-  const deleteVersion = async id => {
-    if (!window.confirm("Delete this version? Tickets will be unlinked from it.")) return;
-    try { await api.kbVersions.remove(id); onRefresh(); } catch (e) { toast.error(e.message); }
-  };
+  const deleteVersion = id => setPendingDelete({ kind: "version", id,
+    message: "Delete this version? Tickets will be unlinked from it." });
 
   const SPRINT_STATUSES = ["Planning", "Active", "Completed"];
 
@@ -3583,10 +3647,8 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
     finally { setSaving(false); }
   };
 
-  const deleteSprint = async id => {
-    if (!window.confirm("Delete this sprint? Tickets will be unassigned from it.")) return;
-    try { await api.sprints.remove(id); onRefresh(); } catch (e) { toast.error(e.message); }
-  };
+  const deleteSprint = id => setPendingDelete({ kind: "sprint", id,
+    message: "Delete this sprint? Tickets will be unassigned from it." });
 
   const saveBaseline = async () => {
     if (!form.name?.trim() || !currentProject) return;
@@ -3601,11 +3663,18 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
     finally { setSaving(false); }
   };
 
-  const deleteBaseline = async id => {
-    if (!window.confirm("Delete this baseline? This cannot be undone.")) return;
+  const deleteBaseline = id => setPendingDelete({ kind: "baseline", id,
+    message: "Delete this baseline? This cannot be undone." });
+
+  const confirmPendingDelete = async () => {
+    const { kind, id } = pendingDelete;
+    setPendingDelete(null);
     try {
-      await api.baselines.remove(id);
-      setBaselines(prev => prev.filter(b => b.id !== id));
+      if (kind === "project")       { await api.kbProjects.remove(id); onRefresh(); }
+      else if (kind === "column")   { await api.kbColumns.remove(id); onRefresh(); }
+      else if (kind === "version")  { await api.kbVersions.remove(id); onRefresh(); }
+      else if (kind === "sprint")   { await api.sprints.remove(id); onRefresh(); }
+      else if (kind === "baseline") { await api.baselines.remove(id); setBaselines(prev => prev.filter(b => b.id !== id)); }
     } catch (e) { toast.error(e.message); }
   };
 
@@ -3754,6 +3823,13 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
                     {currentProject?.id === prj.id && (
                       <span style={{ fontFamily: T.mono, fontSize: 10, color: T.accent, padding: "2px 8px",
                         background: T.accent + "15", border: `1px solid ${T.accent}44`, borderRadius: 4 }}>Active</span>
+                    )}
+                    {isAdmin && (
+                      <button type="button" onClick={() => setMembersProjectId(prj.id)} title="Manage project access"
+                        style={{ fontFamily: T.body, fontSize: 11, padding: "3px 9px", borderRadius: 5,
+                          background: "none", border: `1px solid ${T.border}`, color: T.textMuted, cursor: "pointer" }}>
+                        👥 Members
+                      </button>
                     )}
                     <button type="button" onClick={() => startEdit(prj)} style={{ background: "none", border: "none",
                       cursor: "pointer", color: T.textMuted, fontSize: 14, padding: "2px 4px" }}>✎</button>
@@ -3954,7 +4030,77 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
       {viewBaseline && (
         <BaselineViewModal baselineId={viewBaseline} liveTickets={tickets} onClose={() => setViewBaseline(null)} />
       )}
+      {membersProjectId && (
+        <ProjectMembersModal projectId={membersProjectId}
+          projectName={projects.find(p => p.id === membersProjectId)?.name || ""}
+          onClose={() => setMembersProjectId(null)} />
+      )}
+      {pendingDelete && (
+        <ConfirmModal message={pendingDelete.message} onConfirm={confirmPendingDelete} onCancel={() => setPendingDelete(null)} />
+      )}
     </div>
+  );
+};
+
+// ─── Project Members (access control MVP) ──────────────────────────────────────
+// Binary membership only — capabilities within a project still come from a
+// user's existing global role. This only decides which projects they can see.
+
+const ProjectMembersModal = ({ projectId, projectName, onClose }) => {
+  const [allUsers, setAllUsers] = useState([]);
+  const [members,  setMembers]  = useState(null); // null = loading
+  const [busyId,   setBusyId]   = useState(null);
+
+  const load = () => api.kbProjects.members(projectId).then(setMembers).catch(() => setMembers([]));
+  useEffect(() => {
+    api.users.list().then(setAllUsers).catch(() => {});
+    load();
+  }, [projectId]);
+
+  const memberIds = new Set((members || []).map(m => m.userId));
+
+  const toggle = async user => {
+    setBusyId(user.id);
+    try {
+      if (memberIds.has(user.id)) await api.kbProjects.removeMember(projectId, user.id);
+      else await api.kbProjects.addMember(projectId, user.id);
+      await load();
+    } catch (e) { toast.error(e.message); }
+    finally { setBusyId(null); }
+  };
+
+  return (
+    <Modal title={`👥 Members — ${projectName}`} onClose={onClose} width={440}>
+      <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
+        Only members can see this project at all. A member's actual permissions within it
+        still come from their admin/operator/viewer role — this just controls visibility.
+      </div>
+      {members === null ? (
+        <div style={{ padding: "20px 0", textAlign: "center", fontFamily: T.body, fontSize: 12, color: T.textMuted }}>Loading…</div>
+      ) : (
+        <div style={{ maxHeight: 320, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 8 }}>
+          {allUsers.map(u => {
+            const checked = memberIds.has(u.id);
+            return (
+              <label key={u.id} onClick={() => !busyId && toggle(u)} style={{
+                display: "flex", alignItems: "center", gap: 9, padding: "8px 12px",
+                cursor: busyId ? "default" : "pointer", borderBottom: `1px solid ${T.border}`,
+                background: checked ? T.accent + "10" : "transparent", opacity: busyId === u.id ? 0.5 : 1 }}>
+                <input type="checkbox" readOnly checked={checked} style={{ width: 14, height: 14, cursor: "pointer" }} />
+                <div style={{ width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
+                  background: T.accent + "18", border: `1px solid ${T.accent}44`,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.accent }}>
+                  {u.name?.[0]?.toUpperCase() ?? "?"}
+                </div>
+                <span style={{ fontFamily: T.body, fontSize: 13, color: T.text }}>{u.name}</span>
+                <span style={{ fontFamily: T.mono, fontSize: 11, color: T.textMuted, marginLeft: "auto" }}>{u.email}</span>
+              </label>
+            );
+          })}
+        </div>
+      )}
+    </Modal>
   );
 };
 
@@ -4133,7 +4279,9 @@ const SprintBoardView = ({ sprints, activeSprintId, setActiveSprintId, tickets, 
       </div>
 
       {loading ? (
-        <div style={{ padding: 40, textAlign: "center", color: T.textMuted, fontFamily: T.body, fontSize: 13 }}>Loading…</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 40 }}>
+          <Spinner size="md" />
+        </div>
       ) : (
         <>
           {burndown && (
@@ -5379,6 +5527,15 @@ const KanbanPage = () => {
     return list.sort((a, b) => a.position - b.position);
   };
 
+  const handleExportCSV = () => {
+    const rows = colNames.flatMap(byStatus).map(t => ({
+      ID: t.id, Title: t.title, Type: t.type, Status: t.status, Priority: t.priority,
+      Assignee: t.assigneeName || "", StoryPoints: t.storyPoints ?? "", DueDate: t.dueDate || "",
+    }));
+    if (rows.length === 0) { toast.error("Nothing to export — the current view is empty"); return; }
+    downloadCSV(`${currentProject?.key || "athena"}-tickets.csv`, rows);
+  };
+
   // Shared helper — executes a cross-column move, persisting testNotes when supplied.
   const commitMove = async (ticket, newStatus, testNotes = undefined) => {
     const colCards = tickets
@@ -5674,6 +5831,16 @@ const KanbanPage = () => {
               {bulkMode ? `☑ Select (${selectedIds.size})` : "☐ Select"}
             </button>
           )}
+          {boardView === "board" && (
+            <button type="button" onClick={handleExportCSV} title="Export the current filtered view as CSV"
+              style={{ fontFamily: T.body, fontSize: 12, padding: "5px 11px", borderRadius: 7,
+                background: "none", border: `1px solid ${T.border}`, color: T.textMuted,
+                cursor: "pointer", transition: "color .12s, border-color .12s" }}
+              onMouseEnter={e => { e.currentTarget.style.color = T.text; e.currentTarget.style.borderColor = T.text; }}
+              onMouseLeave={e => { e.currentTarget.style.color = T.textMuted; e.currentTarget.style.borderColor = T.border; }}>
+              ⬇ Export
+            </button>
+          )}
           {canEdit && (
             <button type="button" onClick={() => setBoardMgr(true)}
               title="Board settings — projects, columns, versions"
@@ -5697,8 +5864,8 @@ const KanbanPage = () => {
 
       {/* Views */}
       {loading ? (
-        <div style={{ fontFamily: T.body, fontSize: 14, color: T.textMuted, padding: 40, textAlign: "center" }}>
-          Loading board…
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", flex: 1, padding: 40 }}>
+          <Spinner size="md" label="Loading board…" />
         </div>
       ) : boardView === "roadmap" ? (
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>

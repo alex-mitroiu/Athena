@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { T } from "../tokens";
 import { api } from "../api";
 import { toast } from "../toast";
+import Spinner from "../components/primitives/Spinner";
 
 // ─── Small inline switch — no shared Toggle primitive exists yet, and this is ──
 // its only user today, so it isn't worth promoting to components/primitives/.
@@ -208,8 +209,8 @@ export default function SettingsPage() {
       </div>
 
       {!settings ? (
-        <div style={{ padding: "40px 0", textAlign: "center", color: T.textMuted, fontFamily: T.body, fontSize: 13 }}>
-          Loading…
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 0" }}>
+          <Spinner size="md" />
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

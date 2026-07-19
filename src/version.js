@@ -1,8 +1,14 @@
-export const VERSION  = "0.6.0";
-export const BUILD    = "2026-07-19";
+export const VERSION  = "0.7.0";
+export const BUILD    = "2026-07-20";
 export const CODENAME = "Genesis";
 
 export const CHANGELOG = [
+  {
+    version:  "0.7.0",
+    date:     "2026-07-20",
+    codename: "Genesis",
+    summary:  "JIRA-parity wave: issue activity/history log (every real status transition, visible on a ticket's new Activity tab), Watchers (follow any ticket without being assigned), @Mentions in comments, and CSV export on the board/Test Cases/Test Plans. Project access control (MVP) — a new project_members model gates which projects a user can see at all (admin-managed via a new Members picker in Board Settings), enforced on the project list and the two ticket/test-item \"list everything\" endpoints; ticket sub-resource routes are a documented follow-up, not yet covered. GUI consistency pass: every dialog now closes on Escape or a backdrop click, all destructive actions use the same styled confirm dialog (no more native browser confirm popups), loading states are visually consistent across pages, and a few silent successful actions now show feedback.",
+  },
   {
     version:  "0.6.0",
     date:     "2026-07-19",

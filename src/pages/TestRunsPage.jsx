@@ -104,6 +104,7 @@ export default function TestRunsPage() {
     try {
       await api.testItems.update(id, { ...t, status });
       setTickets(p => p.map(x => x.id === id ? { ...x, status } : x));
+      toast.success(`Marked ${tcLabel(status)}`);
     } catch { toast.error("Failed to update"); }
   };
 

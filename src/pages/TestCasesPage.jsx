@@ -5,6 +5,8 @@ import { useAuth } from "../AuthContext";
 import { toast } from "../toast";
 import Spinner from "../components/primitives/Spinner";
 import TestCaseStoryLinksPanel from "../components/shared/TestCaseStoryLinksPanel";
+import { downloadCSV } from "../csv";
+import { ConfirmModal } from "../components/primitives/Modal";
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
@@ -147,6 +149,7 @@ export default function TestCasesPage() {
   const [selectedId, setSelectedId] = useState(null);
   const [statusFilt, setStatusFilt] = useState("");
   const [modal,      setModal]      = useState(null); // { kind: "folder"|"case", parentId? }
+  const [deleteTarget, setDeleteTarget] = useState(null);
   const [saving,     setSaving]     = useState(false);
 
   // ── Cross-project copy (TKT-LZOXXE) ────────────────────────────────────────
@@ -356,13 +359,13 @@ export default function TestCasesPage() {
   };
 
   const deleteTicket = async id => {
-    if (!window.confirm("Delete this test case? This cannot be undone.")) return;
     try {
       await api.testItems.remove(id);
       setTickets(p => p.filter(t => t.id !== id));
       if (selectedId === id) setSelectedId(null);
       toast.success("Deleted");
     } catch { toast.error("Failed to delete"); }
+    finally { setDeleteTarget(null); }
   };
 
   // ── Create / Edit modal ─────────────────────────────────────────────────────
@@ -567,6 +570,20 @@ export default function TestCasesPage() {
                 ⧉ {copyMode ? `Copy (${copySelected.size})` : "Copy"}
               </button>
             )}
+            <button
+              onClick={() => {
+                if (centerCases.length === 0) return toast.error("Nothing to export — the current view is empty");
+                downloadCSV("athena-test-cases.csv", centerCases.map(c => ({
+                  ID: c.id, Title: c.title, Status: c.status, Priority: c.priority,
+                  Assignee: c.assigneeName || "", DueDate: c.dueDate || "",
+                })));
+              }}
+              title="Export the current filtered view as CSV"
+              style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, background: "transparent",
+                border: `1px solid ${T.border}`, borderRadius: 6, padding: "5px 10px", cursor: "pointer",
+                whiteSpace: "nowrap" }}>
+              ⬇ Export
+            </button>
           </div>
           {copyMode && (
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -709,7 +726,7 @@ export default function TestCasesPage() {
                       ✎ Edit
                     </button>
                     <button
-                      onClick={() => deleteTicket(selected.id)}
+                      onClick={() => setDeleteTarget(selected)}
                       style={{ fontFamily: T.body, fontSize: 11, color: T.danger,
                         background: "none", border: `1px solid ${T.danger}44`, borderRadius: 5,
                         padding: "3px 10px", cursor: "pointer" }}>
@@ -825,6 +842,13 @@ export default function TestCasesPage() {
     </div>
 
     {modal && <TicketFormModal />}
+    {deleteTarget && (
+      <ConfirmModal
+        message={`Delete "${deleteTarget.title}"? This cannot be undone.`}
+        onConfirm={() => deleteTicket(deleteTarget.id)}
+        onCancel={() => setDeleteTarget(null)}
+      />
+    )}
     {copyModalOpen && (
       <div style={{ position: "fixed", inset: 0, background: "#00000055", zIndex: 1000,
         display: "flex", alignItems: "center", justifyContent: "center" }}

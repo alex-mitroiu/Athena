@@ -4,6 +4,7 @@ import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { toast } from "../toast";
 import Spinner from "../components/primitives/Spinner";
+import { downloadCSV } from "../csv";
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
@@ -222,6 +223,7 @@ export default function TestPlansPage() {
     try {
       await api.testItems.update(id, { ...t, status });
       setTickets(p => p.map(x => x.id === id ? { ...x, status } : x));
+      toast.success(`Marked ${tcLabel(status)}`);
     } catch { toast.error("Failed to update"); }
   };
 
@@ -231,6 +233,7 @@ export default function TestPlansPage() {
     try {
       await api.testItems.update(id, { ...t, parentId: newParentId });
       setTickets(p => p.map(x => x.id === id ? { ...x, parentId: newParentId } : x));
+      toast.success("Moved");
     } catch { toast.error("Failed to move"); }
   };
 
@@ -568,6 +571,19 @@ export default function TestPlansPage() {
               </button>
             ))}
           </div>
+          <button type="button" onClick={() => {
+              if (planCoverage.length === 0) return toast.error("Nothing to export — no test plans yet");
+              downloadCSV("athena-test-plan-coverage.csv", planCoverage.map(({ plan, stats, pct }) => ({
+                Plan: plan.title, Total: stats.total, Passed: stats.passed, Failed: stats.failed,
+                Blocked: stats.blocked, "Pass %": pct ?? "",
+              })));
+            }}
+            title="Export plan coverage as CSV"
+            style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, background: "transparent",
+              border: `1px solid ${T.border}`, borderRadius: 7, padding: "6px 11px", cursor: "pointer",
+              flexShrink: 0 }}>
+            ⬇ Export
+          </button>
         </div>
 
         {/* Plan tree / Coverage dashboard */}

@@ -1,8 +1,17 @@
+import { useEffect } from "react";
 import { T } from "../../tokens";
 import Btn from "./Btn";
 
-const Modal = ({ title, onClose, children, width = 520, minHeight }) => (
-  <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.78)", display: "flex",
+const Modal = ({ title, onClose, children, width = 520, minHeight }) => {
+  useEffect(() => {
+    const onKey = e => { if (e.key === "Escape") onClose?.(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+  <div onClick={e => { if (e.target === e.currentTarget) onClose?.(); }}
+    style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,.78)", display: "flex",
       alignItems: "center", justifyContent: "center", zIndex: 1000, padding: 20 }}>
     <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12,
       width: "100%", maxWidth: width, maxHeight: "90vh", overflowY: "auto",
@@ -20,7 +29,8 @@ const Modal = ({ title, onClose, children, width = 520, minHeight }) => (
       <div style={{ padding: "22px 24px" }}>{children}</div>
     </div>
   </div>
-);
+  );
+};
 
 const ConfirmModal = ({ message, onConfirm, onCancel }) => (
   <Modal title="Confirm" onClose={onCancel} width={380}>

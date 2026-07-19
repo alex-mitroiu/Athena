@@ -75,6 +75,10 @@ export const api = {
     labels:      (id)          => req("GET",    `/tickets/${id}/labels`),
     addLabel:    (id, label)   => req("POST",   `/tickets/${id}/labels`, { label }),
     removeLabel: (labelId)     => req("DELETE", `/ticket-labels/${labelId}`),
+    statusHistory: (id)  => req("GET",    `/tickets/${id}/status-history`),
+    watchers:      (id)  => req("GET",    `/tickets/${id}/watchers`),
+    watch:         (id)  => req("POST",   `/tickets/${id}/watch`, {}),
+    unwatch:       (id)  => req("DELETE", `/tickets/${id}/watch`),
     downloadAttachment: async (attId, filename) => {
       const res = await fetch(`/api/attachments/${attId}/download`, {
         headers: { Authorization: `Bearer ${getToken()}` },
@@ -108,6 +112,9 @@ export const api = {
     create: (data)       => req("POST",   "/kb/projects", data),
     update: (id, data)   => req("PUT",    `/kb/projects/${id}`, data),
     remove: (id)         => req("DELETE", `/kb/projects/${id}`),
+    members:      (id)         => req("GET",    `/kb/projects/${id}/members`),
+    addMember:    (id, userId) => req("POST",   `/kb/projects/${id}/members`, { userId }),
+    removeMember: (id, userId) => req("DELETE", `/kb/projects/${id}/members/${userId}`),
   },
 
   versions: {

@@ -1,10 +1,11 @@
 "use strict";
 
 module.exports = function extrasRoutes(app, ctx) {
-  const { db, ok, err, uid, auth, requireRole,
+  const { db, ok, err, uid, auth, requireRole, requireProjectAccess,
           mapSavedFilter, mapDashboardWidget, mapWorkLog, mapBaseline, mapBaselineTicket } = ctx;
 
   const write = requireRole(["operator", "admin"]);
+  const projectAccess = requireProjectAccess("id");
 
   // ─── Saved Filters (TKT-3MD0S1) ────────────────────────────────────────────
   // Per-user, not shared — a saved filter is a personal shortcut, not a team-wide
@@ -123,11 +124,11 @@ module.exports = function extrasRoutes(app, ctx) {
   // diff against later, e.g. at a release cut. Read-only once created (no edit
   // route) since a baseline that can drift after the fact defeats its purpose.
 
-  app.get("/api/kb/projects/:id/baselines", auth(), (req, res) => {
+  app.get("/api/kb/projects/:id/baselines", auth(), projectAccess, (req, res) => {
     ok(res, db.prepare("SELECT * FROM baselines WHERE project_id=? ORDER BY created_at DESC").all(req.params.id).map(mapBaseline));
   });
 
-  app.post("/api/kb/projects/:id/baselines", write, (req, res) => {
+  app.post("/api/kb/projects/:id/baselines", write, projectAccess, (req, res) => {
     if (!db.prepare("SELECT id FROM kb_projects WHERE id=?").get(req.params.id)) return err(res, "Project not found", 404);
     const { name, description = "" } = req.body || {};
     if (!name || !name.trim()) return err(res, "name required");

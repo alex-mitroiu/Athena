@@ -3,6 +3,7 @@ import { T } from "../tokens";
 import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { toast } from "../toast";
+import Spinner from "../components/primitives/Spinner";
 
 // ─── Configurable Dashboard (TKT-RKTB6L) ───────────────────────────────────────
 // Per-user widget layout backed by dashboard_widgets. Each widget type is
@@ -60,7 +61,7 @@ const MyTicketsWidget = () => {
     }).catch(() => setTickets([]));
   }, [user?.id]);
 
-  if (tickets === null) return <EmptyNote>Loading…</EmptyNote>;
+  if (tickets === null) return <div style={{ display: "flex", justifyContent: "center", padding: 20 }}><Spinner size="sm" /></div>;
   if (tickets.length === 0) return <EmptyNote>No open tickets assigned to you.</EmptyNote>;
 
   return (
@@ -104,7 +105,7 @@ const BurndownWidget = () => {
     return () => { cancelled = true; };
   }, []);
 
-  if (state.loading) return <EmptyNote>Loading…</EmptyNote>;
+  if (state.loading) return <div style={{ display: "flex", justifyContent: "center", padding: 20 }}><Spinner size="sm" /></div>;
   if (!state.sprint) return <EmptyNote>No active sprint.</EmptyNote>;
 
   const pct = state.totalPoints > 0 ? Math.round(((state.totalPoints - state.remainingPoints) / state.totalPoints) * 100) : 0;
@@ -138,7 +139,7 @@ const NotificationsWidget = () => {
       setItems(prev => prev.map(n => n.id === id ? { ...n, isRead: true } : n)));
   };
 
-  if (items === null) return <EmptyNote>Loading…</EmptyNote>;
+  if (items === null) return <div style={{ display: "flex", justifyContent: "center", padding: 20 }}><Spinner size="sm" /></div>;
   if (items.length === 0) return <EmptyNote>No notifications yet.</EmptyNote>;
 
   return (
@@ -169,7 +170,7 @@ const WorkLogWidget = () => {
 
   useEffect(() => { api.workLogs.summary().then(setRows).catch(() => setRows([])); }, []);
 
-  if (rows === null) return <EmptyNote>Loading…</EmptyNote>;
+  if (rows === null) return <div style={{ display: "flex", justifyContent: "center", padding: 20 }}><Spinner size="sm" /></div>;
   if (rows.length === 0) return <EmptyNote>No time logged yet.</EmptyNote>;
 
   const total = rows.reduce((s, r) => s + r.totalMinutes, 0);
@@ -273,7 +274,9 @@ export default function DashboardPage() {
       </div>
 
       {loading ? (
-        <div style={{ padding: "40px 0", textAlign: "center", color: T.textMuted, fontFamily: T.body, fontSize: 13 }}>Loading…</div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "40px 0" }}>
+          <Spinner size="md" />
+        </div>
       ) : widgets.length === 0 ? (
         <div style={{ padding: "50px 20px", textAlign: "center", border: `1px dashed ${T.border}`, borderRadius: 10 }}>
           <div style={{ fontSize: 26, marginBottom: 8 }}>📊</div>
