@@ -35,10 +35,11 @@ export const api = {
   },
 
   users: {
-    list:   ()                => req("GET",    "/users"),
-    create: (data)            => req("POST",   "/users", data),
-    update: (id, data)        => req("PATCH",  `/users/${id}`, data),
-    remove: (id)              => req("DELETE", `/users/${id}`),
+    list:        ()                => req("GET",    "/users"),
+    mentionable: ()                => req("GET",    "/users/mentionable"),
+    create:      (data)            => req("POST",   "/users", data),
+    update:      (id, data)        => req("PATCH",  `/users/${id}`, data),
+    remove:      (id)              => req("DELETE", `/users/${id}`),
   },
 
   labels: {
@@ -65,6 +66,7 @@ export const api = {
     links:   (id)       => req("GET",    `/tickets/${id}/links`),
     addLink: (id, data) => req("POST",   `/tickets/${id}/links`, data),
     removeLink: (id)    => req("DELETE", `/ticket-links/${id}`),
+    linksAmong: (ids)   => req("GET",    `/ticket-links/among?ids=${ids.join(",")}`),
     testedBy: (id)      => req("GET",    `/tickets/${id}/tested-by`),
     comments:      (id)       => req("GET",    `/tickets/${id}/comments`),
     addComment:    (id, data) => req("POST",   `/tickets/${id}/comments`, data),
@@ -76,6 +78,7 @@ export const api = {
     addLabel:    (id, label)   => req("POST",   `/tickets/${id}/labels`, { label }),
     removeLabel: (labelId)     => req("DELETE", `/ticket-labels/${labelId}`),
     statusHistory: (id)  => req("GET",    `/tickets/${id}/status-history`),
+    fieldHistory:  (id)  => req("GET",    `/tickets/${id}/field-history`),
     watchers:      (id)  => req("GET",    `/tickets/${id}/watchers`),
     watch:         (id)  => req("POST",   `/tickets/${id}/watch`, {}),
     unwatch:       (id)  => req("DELETE", `/tickets/${id}/watch`),
@@ -105,6 +108,11 @@ export const api = {
     addDataRow:    (id, data) => req("POST",   `/test-items/${id}/data-rows`, data),
     updateDataRow: (id, data) => req("PUT",    `/data-rows/${id}`, data),
     removeDataRow: (id)       => req("DELETE", `/data-rows/${id}`),
+    steps:         (id)       => req("GET",    `/test-items/${id}/steps`),
+    addStep:       (id, data) => req("POST",   `/test-items/${id}/steps`, data),
+    updateStep:    (id, data) => req("PUT",    `/steps/${id}`, data),
+    removeStep:    (id)       => req("DELETE", `/steps/${id}`),
+    swapSteps:     (id, otherId) => req("POST", `/steps/${id}/swap/${otherId}`),
   },
 
   kbProjects: {
@@ -135,6 +143,31 @@ export const api = {
     update:  (id, data)             => req("PUT",   `/kb/columns/${id}`, data),
     reorder: (projectId, order)     => req("PATCH", `/kb/projects/${projectId}/columns`, { order }),
     remove:  (id)                   => req("DELETE", `/kb/columns/${id}`),
+  },
+
+  workflowTransitions: {
+    list:   (projectId)       => req("GET",    `/kb/projects/${projectId}/transitions`),
+    create: (projectId, data) => req("POST",   `/kb/projects/${projectId}/transitions`, data),
+    update: (id, data)        => req("PUT",    `/kb/transitions/${id}`, data),
+    remove: (id)               => req("DELETE", `/kb/transitions/${id}`),
+  },
+
+  releaseMilestones: {
+    list:          ()               => req("GET",    "/release-milestones"),
+    create:        (data)           => req("POST",   "/release-milestones", data),
+    update:        (id, data)       => req("PUT",    `/release-milestones/${id}`, data),
+    remove:        (id)             => req("DELETE", `/release-milestones/${id}`),
+    addVersion:    (id, versionId)  => req("POST",   `/release-milestones/${id}/versions`, { versionId }),
+    removeVersion: (linkId)         => req("DELETE", `/release-milestone-versions/${linkId}`),
+  },
+
+  boards: {
+    list:           (projectId)       => req("GET",    `/kb/projects/${projectId}/boards`),
+    create:         (projectId, data) => req("POST",   `/kb/projects/${projectId}/boards`, data),
+    update:         (id, data)        => req("PUT",    `/kb/boards/${id}`, data),
+    remove:         (id)              => req("DELETE", `/kb/boards/${id}`),
+    statuses:       (id)              => req("GET",    `/kb/boards/${id}/statuses`),
+    updateStatuses: (id, statuses)    => req("PUT",    `/kb/boards/${id}/statuses`, { statuses }),
   },
 
   sprints: {

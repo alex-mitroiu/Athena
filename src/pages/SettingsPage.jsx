@@ -21,10 +21,12 @@ const Toggle = ({ on, onChange }) => (
   </button>
 );
 
-const fieldLabel = {
+// A function (like its inputStyle sibling below), not a frozen object literal —
+// re-reads T fresh on each use instead of freezing whatever was active on load.
+const fieldLabel = () => ({
   display: "block", fontFamily: T.body, fontSize: 11, fontWeight: 600,
   color: T.textMuted, textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 5,
-};
+});
 
 const inputStyle = disabled => ({
   width: "100%", padding: "8px 12px", borderRadius: 7,
@@ -70,14 +72,14 @@ const SsoPanel = ({ settings, onChange }) => {
 
       {FIELDS.map(({ key, label, placeholder }) => (
         <div key={key} style={{ marginBottom: 14 }}>
-          <label style={fieldLabel}>{label}</label>
+          <label style={fieldLabel()}>{label}</label>
           <input value={settings[key] || ""} placeholder={placeholder} disabled={!enabled}
             onChange={e => onChange(key, e.target.value)} style={inputStyle(!enabled)} />
         </div>
       ))}
 
       <div style={{ marginBottom: 14 }}>
-        <label style={fieldLabel}>Client Secret</label>
+        <label style={fieldLabel()}>Client Secret</label>
         <div style={{ display: "flex", gap: 8 }}>
           <input type={showSecret ? "text" : "password"} value={settings.sso_client_secret || ""}
             placeholder="Paste client secret…" disabled={!enabled}
@@ -92,7 +94,7 @@ const SsoPanel = ({ settings, onChange }) => {
       </div>
 
       <div style={{ marginBottom: 4 }}>
-        <label style={fieldLabel}>Default role for new SSO users</label>
+        <label style={fieldLabel()}>Default role for new SSO users</label>
         <select value={settings.sso_default_role || "operator"} disabled={!enabled}
           onChange={e => onChange("sso_default_role", e.target.value)}
           style={{ ...inputStyle(!enabled), width: 180, cursor: enabled ? "pointer" : "default" }}>
@@ -175,6 +177,29 @@ const EstimationPanel = ({ settings, onChange }) => (
   </div>
 );
 
+// ─── Sprint Capacity panel ──────────────────────────────────────────────────────
+// One admin-calibrated constant — story points a single team member can absorb
+// in a sprint — used by SprintBoardView to flag over-allocated teams. Same
+// guess-until-real-data-suggests-better idiom as EstimationPanel above.
+
+const CapacityPanel = ({ settings, onChange }) => (
+  <div style={{ maxWidth: 560 }}>
+    <div style={{ fontFamily: T.head, fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 4 }}>
+      Sprint Capacity
+    </div>
+    <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, marginBottom: 16 }}>
+      Story points a single team member can absorb per sprint. The Sprint board multiplies
+      this by each team's headcount to flag over-allocated teams.
+    </div>
+    <div>
+      <label style={fieldLabel()}>Points per person per sprint</label>
+      <input type="number" min="0" step="1" value={settings.capacity_points_per_person_per_sprint ?? ""}
+        placeholder="8" onChange={e => onChange("capacity_points_per_person_per_sprint", e.target.value)}
+        style={{ ...inputStyle(false), width: 90 }} />
+    </div>
+  </div>
+);
+
 // ─── Page ───────────────────────────────────────────────────────────────────────
 
 export default function SettingsPage() {
@@ -219,6 +244,9 @@ export default function SettingsPage() {
           </div>
           <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: 22 }}>
             <EstimationPanel settings={settings} onChange={handleChange} />
+          </div>
+          <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: 22 }}>
+            <CapacityPanel settings={settings} onChange={handleChange} />
           </div>
         </div>
       )}

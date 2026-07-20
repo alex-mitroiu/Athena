@@ -22,13 +22,11 @@ const WIDGET_CATALOG = [
 
 const PRIORITY_DOT = { Critical: "#ef4444", High: "#f59e0b", Medium: "#6366f1", Low: "#6b7280" };
 
-const cardStyle = {
-  background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
-  display: "flex", flexDirection: "column", minWidth: 0,
-};
-
 const WidgetChrome = ({ icon, label, onMoveUp, onMoveDown, onRemove, canUp, canDown, children }) => (
-  <div style={cardStyle}>
+  // Recomputed on every render (not a module-level constant) so it re-reads T
+  // fresh on a theme switch instead of freezing whatever was active on load.
+  <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
+    display: "flex", flexDirection: "column", minWidth: 0 }}>
     <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 14px",
       borderBottom: `1px solid ${T.border}` }}>
       <span style={{ fontSize: 14 }}>{icon}</span>

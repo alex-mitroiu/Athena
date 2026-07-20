@@ -9,6 +9,7 @@ import { VERSION, CODENAME, COPYRIGHT_YEAR, COPYRIGHT_OWNER } from "./version";
 import LoginPage      from "./pages/LoginPage";
 import DashboardPage  from "./pages/DashboardPage";
 import KanbanPage     from "./pages/KanbanPage";
+import RoadmapPage    from "./pages/RoadmapPage";
 import ReleasesPage   from "./pages/ReleasesPage";
 import TestPlansPage  from "./pages/TestPlansPage";
 import TestRunsPage   from "./pages/TestRunsPage";
@@ -19,6 +20,10 @@ import ProjectsPage   from "./pages/ProjectsPage";
 import TraceabilityPage from "./pages/TraceabilityPage";
 import UserManualPage from "./pages/UserManualPage";
 import SettingsPage   from "./pages/SettingsPage";
+import {
+  IconChartBar, IconClipboard, IconMap, IconTag, IconFlask, IconRefresh,
+  IconCheck, IconLink, IconFolder, IconUser, IconGroup, IconSettings, AnyIcon,
+} from "./components/primitives/Icon";
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 
@@ -29,6 +34,7 @@ const THEME_KEY = "athena_theme";
 const PAGE_TITLES = {
   dashboard: "Dashboard",
   kanban: "Integration Board",
+  roadmap: "Roadmap",
   releases: "Releases",
   "test-plans": "Test Plans",
   "test-runs": "Test Runs",
@@ -182,7 +188,9 @@ const Header = ({ page, setPage, user, isAdmin, activeRole, isDark, setIsDark, h
         cursor: "pointer", borderRadius: 6 }}
       onMouseEnter={e => { e.currentTarget.style.background = T.surfaceHover; }}
       onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}>
-      <span style={{ fontSize: 14, width: 18, textAlign: "center", flexShrink: 0 }}>{icon}</span>
+      <span style={{ width: 18, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+        <AnyIcon icon={icon} size={14} />
+      </span>
       <span style={{ fontFamily: T.body, fontSize: 13, color: T.text, fontWeight: 500 }}>{label}</span>
     </button>
   );
@@ -257,7 +265,7 @@ const Header = ({ page, setPage, user, isAdmin, activeRole, isDark, setIsDark, h
               <Divider />
 
               <MenuItem icon="📖" label="User Manual" onClick={() => setPage("user-manual")} />
-              {isAdmin && <MenuItem icon="⚙" label="Application Settings" onClick={() => setPage("settings")} />}
+              {isAdmin && <MenuItem icon={IconSettings} label="Application Settings" onClick={() => setPage("settings")} />}
 
               <Divider />
 
@@ -272,7 +280,7 @@ const Header = ({ page, setPage, user, isAdmin, activeRole, isDark, setIsDark, h
 
 // ─── Nav button ───────────────────────────────────────────────────────────────
 
-const NavBtn = ({ pageKey, icon, label, page, setPage, indent = false }) => {
+const NavBtn = ({ pageKey, icon: IconComp, label, page, setPage, indent = false }) => {
   const active = page === pageKey;
   return (
     <button
@@ -287,7 +295,7 @@ const NavBtn = ({ pageKey, icon, label, page, setPage, indent = false }) => {
         cursor: "pointer", fontFamily: T.body, fontSize: 13, fontWeight: active ? 600 : 400,
         textAlign: "left", transition: "background .12s",
       }}>
-      <span style={{ fontSize: indent ? 12 : 14 }}>{icon}</span>
+      <IconComp size={indent ? 15 : 17} style={{ flexShrink: 0 }} />
       {label}
     </button>
   );
@@ -306,9 +314,16 @@ export default function App() {
     return saved !== null ? saved === "dark" : true;
   });
 
-  // Apply theme on mount and change
+  // Mutate T synchronously during render, not inside an effect — an effect
+  // fires after this render already committed, one pass too late for the very
+  // re-render that's supposed to reflect the new theme. Every other component
+  // reads T directly (no context), so this render's cascade is the only chance
+  // for the whole tree to pick up the new values in one shot; components that
+  // don't happen to re-render again afterward would otherwise stay stuck on
+  // stale colors until some unrelated state change repaints them.
+  applyTheme(isDark);
+
   useEffect(() => {
-    applyTheme(isDark);
     localStorage.setItem(THEME_KEY, isDark ? "dark" : "light");
   }, [isDark]);
 
@@ -442,17 +457,18 @@ export default function App() {
           {/* Nav */}
           <nav style={{ flex: 1, overflowY: "auto", padding: "8px 6px" }}>
             <NavSection label="Board" />
-            {nb("dashboard",  "📊", "Dashboard")}
-            {nb("kanban",     "📋", "Integration Board")}
-            {nb("releases",   "🏷", "Releases", true)}
-            {nb("test-plans", "🧪", "Test Plans", true)}
-            {nb("test-runs",  "🔄", "Test Runs", true)}
-            {nb("test-cases", "✓",  "Test Cases", true)}
-            {nb("traceability", "🔗", "Traceability", true)}
+            {nb("dashboard",  IconChartBar, "Dashboard")}
+            {nb("kanban",     IconClipboard, "Integration Board")}
+            {canEdit && nb("roadmap", IconMap, "Roadmap", true)}
+            {nb("releases",   IconTag, "Releases", true)}
+            {nb("test-plans", IconFlask, "Test Plans", true)}
+            {nb("test-runs",  IconRefresh, "Test Runs", true)}
+            {nb("test-cases", IconCheck,  "Test Cases", true)}
+            {nb("traceability", IconLink, "Traceability", true)}
             {isAdmin && <NavSection label="Admin" />}
-            {isAdmin && nb("projects", "📁", "Projects")}
-            {isAdmin && nb("users", "👤", "Users")}
-            {isAdmin && nb("teams", "👥", "Teams")}
+            {isAdmin && nb("projects", IconFolder, "Projects")}
+            {isAdmin && nb("users", IconUser, "Users")}
+            {isAdmin && nb("teams", IconGroup, "Teams")}
           </nav>
         </div>
 
@@ -463,6 +479,7 @@ export default function App() {
           <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", padding: "0 20px" }}>
             {page === "dashboard"    && <DashboardPage />}
             {page === "kanban"       && <KanbanPage />}
+            {page === "roadmap"      && canEdit && <RoadmapPage />}
             {page === "releases"     && <ReleasesPage />}
             {page === "test-plans"   && <TestPlansPage />}
             {page === "test-runs"    && <TestRunsPage />}

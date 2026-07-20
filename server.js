@@ -94,6 +94,24 @@ db.exec(`
     created_at   TEXT NOT NULL
   );
 
+  -- Cross-project release milestones (TKT-5NQWK5) — kb_versions is project-scoped
+  -- only; a milestone groups one version from each of several projects under a
+  -- shared target date, so several teams shipping against the same launch date
+  -- can be tracked as one thing.
+  CREATE TABLE IF NOT EXISTS release_milestones (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    target_date TEXT DEFAULT NULL,
+    created_at  TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS release_milestone_versions (
+    id           TEXT PRIMARY KEY,
+    milestone_id TEXT NOT NULL REFERENCES release_milestones(id) ON DELETE CASCADE,
+    version_id   TEXT NOT NULL REFERENCES kb_versions(id) ON DELETE CASCADE,
+    created_at   TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS kb_columns (
     id         TEXT PRIMARY KEY,
     project_id TEXT NOT NULL REFERENCES kb_projects(id) ON DELETE CASCADE,
@@ -199,6 +217,20 @@ db.exec(`
     created_at TEXT NOT NULL
   );
 
+  CREATE TABLE IF NOT EXISTS test_case_steps (
+    id              TEXT PRIMARY KEY,
+    case_id         TEXT NOT NULL,
+    position        INTEGER NOT NULL DEFAULT 0,
+    action          TEXT NOT NULL DEFAULT '',
+    test_data       TEXT NOT NULL DEFAULT '',
+    expected_result TEXT NOT NULL DEFAULT '',
+    status          TEXT NOT NULL DEFAULT 'Not Executed',
+    actual_result   TEXT DEFAULT NULL,
+    executed_at     TEXT DEFAULT NULL,
+    executed_by     TEXT DEFAULT NULL,
+    created_at      TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS notifications (
     id         TEXT PRIMARY KEY,
     user_id    TEXT NOT NULL,
@@ -271,6 +303,20 @@ db.exec(`
     changed_at TEXT NOT NULL
   );
 
+  -- Generic field-change log (priority, assignee, etc.) — separate from status
+  -- history since status has its own from/to-status shape wired into workflow
+  -- transitions and reports; this is everything else. from_value/to_value are
+  -- already display-ready strings (e.g. a resolved assignee name, not an id).
+  CREATE TABLE IF NOT EXISTS ticket_field_history (
+    id         TEXT PRIMARY KEY,
+    ticket_id  TEXT NOT NULL,
+    field      TEXT NOT NULL,
+    from_value TEXT,
+    to_value   TEXT,
+    changed_by TEXT DEFAULT '',
+    changed_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS ticket_watchers (
     id         TEXT PRIMARY KEY,
     ticket_id  TEXT NOT NULL,
@@ -323,6 +369,12 @@ try { db.exec("ALTER TABLE tickets ADD COLUMN approved_by TEXT DEFAULT ''"); } c
 try { db.exec("ALTER TABLE tickets ADD COLUMN approved_at TEXT DEFAULT NULL"); } catch {}
 // Project Lead — a designation only, grants no capabilities beyond the existing role system.
 try { db.exec("ALTER TABLE kb_projects ADD COLUMN lead_user_id TEXT DEFAULT NULL"); } catch {}
+// Initiative hierarchy tier (TKT-U2SCAK) — an Epic can optionally sit under an
+// Initiative (itself just another ticket, type="Initiative"), so a program
+// spanning several Epics, potentially across projects, can be tracked as one
+// thing. No new table: initiative_id is a plain self-reference on tickets,
+// same shape as parent_id.
+try { db.exec("ALTER TABLE tickets ADD COLUMN initiative_id TEXT DEFAULT NULL"); } catch {}
 
 // Project access control (MVP) — backfill every existing user into every existing
 // project so this ships as a visibility narrowing for NEW projects going forward,
@@ -333,6 +385,95 @@ try { db.exec("ALTER TABLE kb_projects ADD COLUMN lead_user_id TEXT DEFAULT NULL
   const insertMember = db.prepare("INSERT OR IGNORE INTO project_members (id,project_id,user_id,created_at) VALUES (?,?,?,?)");
   const backfillNow = new Date().toISOString();
   for (const p of allProjects) for (const u of allUsers) insertMember.run(`PM-${uid()}`, p.id, u.id, backfillNow);
+}
+
+// Workflow (TKT-188OHK) — a status gains a category (To Do / In Progress / Done),
+// and diagram position, alongside its existing name/position/color/wip_limit.
+try { db.exec("ALTER TABLE kb_columns ADD COLUMN category TEXT DEFAULT NULL"); } catch {}
+try { db.exec("ALTER TABLE kb_columns ADD COLUMN diagram_x REAL DEFAULT NULL"); } catch {}
+try { db.exec("ALTER TABLE kb_columns ADD COLUMN diagram_y REAL DEFAULT NULL"); } catch {}
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS workflow_transitions (
+    id          TEXT PRIMARY KEY,
+    project_id  TEXT NOT NULL REFERENCES kb_projects(id) ON DELETE CASCADE,
+    ticket_type TEXT DEFAULT NULL,
+    name        TEXT NOT NULL,
+    from_status TEXT DEFAULT NULL,
+    to_status   TEXT NOT NULL,
+    created_at  TEXT NOT NULL
+  );
+`);
+
+// Configurable transition requirements ("custom behaviors") — a transition can
+// optionally demand a link or a field be set before it's allowed to fire, e.g.
+// "moving to Test Failed requires a linked ticket" or "moving to Released
+// requires a Version already set." rule_type is null when a transition has no
+// requirement (the overwhelming default case).
+try { db.exec("ALTER TABLE workflow_transitions ADD COLUMN rule_type TEXT DEFAULT NULL"); } catch {}
+try { db.exec("ALTER TABLE workflow_transitions ADD COLUMN rule_config TEXT DEFAULT NULL"); } catch {}
+
+// Backfill category on existing columns so category-based report logic (replacing
+// the old hardcoded DONE_STATUSES name-matching) keeps working unchanged for every
+// project that existed before this feature — Done/Ready to Deploy/Released match
+// what DONE_STATUSES already matched by name; the first column per project (by
+// position) becomes To Do; everything else defaults to In Progress. Admins can
+// correct any of this afterward in the new Workflow tab — this is a starting
+// point, not a guess that has to be perfect.
+{
+  const uncategorized = db.prepare("SELECT * FROM kb_columns WHERE category IS NULL").all();
+  const firstPosByProject = new Map();
+  for (const c of db.prepare("SELECT project_id, MIN(position) AS minPos FROM kb_columns GROUP BY project_id").all())
+    firstPosByProject.set(c.project_id, c.minPos);
+  const setCategory = db.prepare("UPDATE kb_columns SET category=? WHERE id=?");
+  const DONE_NAMES = new Set(["Done", "Ready to Deploy", "Released"]);
+  for (const c of uncategorized) {
+    const category = DONE_NAMES.has(c.name) ? "Done"
+      : c.position === firstPosByProject.get(c.project_id) ? "To Do"
+      : "In Progress";
+    setCategory.run(category, c.id);
+  }
+}
+
+// Boards (TKT-G3AY4J) — a board is a filtered, admin-configurable VIEW over a
+// subset of a project's shared statuses (e.g. a business team's board only
+// shows Created..Analysis Done while a dev team's board shows Ready..In
+// Testing) — not a separate workflow. Ticket status stays project-wide and
+// continuous; a ticket simply appears on whichever board(s) currently include
+// its live status.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS boards (
+    id         TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES kb_projects(id) ON DELETE CASCADE,
+    name       TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS board_statuses (
+    id         TEXT PRIMARY KEY,
+    board_id   TEXT NOT NULL REFERENCES boards(id) ON DELETE CASCADE,
+    status     TEXT NOT NULL,
+    position   INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+`);
+
+// Every project gets a default board covering every status it already has, so
+// the Kanban board's visible columns don't change for anyone until an admin
+// deliberately creates more boards and narrows one down.
+{
+  const projectsWithoutBoards = db.prepare(`
+    SELECT p.id FROM kb_projects p WHERE NOT EXISTS (SELECT 1 FROM boards b WHERE b.project_id = p.id)
+  `).all();
+  const insertBoard = db.prepare("INSERT INTO boards (id,project_id,name,created_at) VALUES (?,?,?,?)");
+  const insertBoardStatus = db.prepare("INSERT INTO board_statuses (id,board_id,status,position,created_at) VALUES (?,?,?,?,?)");
+  const backfillBoardsNow = new Date().toISOString();
+  for (const p of projectsWithoutBoards) {
+    const boardId = `BRD-${uid()}`;
+    insertBoard.run(boardId, p.id, "Main Board", backfillBoardsNow);
+    const cols = db.prepare("SELECT name FROM kb_columns WHERE project_id=? ORDER BY position ASC").all(p.id);
+    cols.forEach((c, i) => insertBoardStatus.run(`BST-${uid()}`, boardId, c.name, i, backfillBoardsNow));
+  }
 }
 
 // ─── One-time migration: move test artifacts out of tickets into test_items ────
@@ -473,6 +614,8 @@ const mapTicket = r => ({
   type:            r.type            || "Task",
   version:         r.version         || "",
   parentId:        r.parent_id       || null,
+  initiativeId:    r.initiative_id   || null,
+  initiativeName:  r.initiative_title || null,
   assigneeId:      r.assignee_id     || null,
   assigneeName:    r.assignee_name   || null,
   assigneeInitial: r.assignee_name   ? r.assignee_name.trim()[0].toUpperCase() : null,
@@ -533,6 +676,7 @@ const mapSprint = r => ({ id: r.id, projectId: r.project_id, name: r.name, start
 const mapSprintSnapshot = r => ({ id: r.id, sprintId: r.sprint_id, date: r.date, remainingPoints: r.remaining_points, totalPoints: r.total_points });
 const mapSavedFilter = r => ({ id: r.id, userId: r.user_id, name: r.name, entityType: r.entity_type, query: (() => { try { return JSON.parse(r.query || "{}"); } catch { return {}; } })(), createdAt: r.created_at });
 const mapTestDataRow = r => ({ id: r.id, caseId: r.case_id, rowData: (() => { try { return JSON.parse(r.row_data || "{}"); } catch { return {}; } })(), status: r.status || "Ready", position: r.position ?? 0, createdAt: r.created_at });
+const mapTestStep = r => ({ id: r.id, caseId: r.case_id, position: r.position ?? 0, action: r.action || "", testData: r.test_data || "", expectedResult: r.expected_result || "", status: r.status || "Not Executed", actualResult: r.actual_result || null, executedAt: r.executed_at || null, executedBy: r.executed_by || null, createdAt: r.created_at });
 const mapNotification = r => ({ id: r.id, userId: r.user_id, type: r.type, message: r.message, ticketId: r.ticket_id || null, isRead: r.is_read === 1, createdAt: r.created_at });
 const mapDashboardWidget = r => ({ id: r.id, userId: r.user_id, widgetType: r.widget_type, position: r.position ?? 0, config: (() => { try { return JSON.parse(r.config || "{}"); } catch { return {}; } })(), createdAt: r.created_at });
 const mapWorkLog = r => ({ id: r.id, ticketId: r.ticket_id, userId: r.user_id, userName: r.user_name || null, minutes: r.minutes, loggedAt: r.logged_at, note: r.note || "", createdAt: r.created_at });
@@ -540,12 +684,17 @@ const mapBaseline = r => ({ id: r.id, projectId: r.project_id, name: r.name, des
 const mapBaselineTicket = r => ({ id: r.id, baselineId: r.baseline_id, ticketId: r.ticket_id, title: r.title, type: r.type, status: r.status, priority: r.priority, storyPoints: r.story_points ?? null, assigneeName: r.assignee_name || "" });
 
 const mapStatusHistory = r => ({ id: r.id, ticketId: r.ticket_id, fromStatus: r.from_status || null, toStatus: r.to_status, changedBy: r.changed_by || "", changedByName: r.changed_by_name || null, changedAt: r.changed_at });
+const mapFieldHistory = r => ({ id: r.id, ticketId: r.ticket_id, field: r.field, fromValue: r.from_value, toValue: r.to_value, changedBy: r.changed_by || "", changedByName: r.changed_by_name || null, changedAt: r.changed_at });
 const mapWatcher = r => ({ id: r.id, ticketId: r.ticket_id, userId: r.user_id, userName: r.user_name || null, createdAt: r.created_at });
 const mapProjectMember = r => ({ id: r.id, projectId: r.project_id, userId: r.user_id, userName: r.user_name || null, userEmail: r.user_email || null, createdAt: r.created_at });
 
 const mapKbProject  = r => ({ id: r.id, name: r.name, key: r.key, color: r.color || "#6366f1", description: r.description || "", createdAt: r.created_at, leadUserId: r.lead_user_id || null, leadUserName: r.lead_user_name || null });
 const mapKbVersion  = r => ({ id: r.id, projectId: r.project_id, name: r.name, description: r.description || "", status: r.status || "Planning", releaseDate: r.release_date || null, createdAt: r.created_at });
-const mapKbColumn   = r => ({ id: r.id, projectId: r.project_id, name: r.name, position: r.position ?? 0, color: r.color || "#6366f1", wipLimit: r.wip_limit ?? null, createdAt: r.created_at });
+const mapReleaseMilestone = r => ({ id: r.id, name: r.name, targetDate: r.target_date || null, createdAt: r.created_at });
+const mapKbColumn   = r => ({ id: r.id, projectId: r.project_id, name: r.name, position: r.position ?? 0, color: r.color || "#6366f1", wipLimit: r.wip_limit ?? null, category: r.category || "In Progress", diagramX: r.diagram_x ?? null, diagramY: r.diagram_y ?? null, createdAt: r.created_at });
+const mapWorkflowTransition = r => ({ id: r.id, projectId: r.project_id, ticketType: r.ticket_type || null, name: r.name, fromStatus: r.from_status || null, toStatus: r.to_status, ruleType: r.rule_type || null, ruleConfig: (() => { try { return r.rule_config ? JSON.parse(r.rule_config) : null; } catch { return null; } })(), createdAt: r.created_at });
+const mapBoard = r => ({ id: r.id, projectId: r.project_id, name: r.name, createdAt: r.created_at });
+const mapBoardStatus = r => ({ id: r.id, boardId: r.board_id, status: r.status, position: r.position ?? 0 });
 
 const inverseLinkLabel = lbl =>
   ({ "blocks": "is blocked by", "is blocked by": "blocks",
@@ -600,12 +749,12 @@ const ctx = {
   isProjectMember, accessibleProjectIds, requireProjectAccess, isAdminUser,
   mapTicket, mapTicketLink, inverseLinkLabel,
   mapTestItem, mapTestCaseLink,
-  mapKbProject, mapKbVersion, mapKbColumn,
+  mapKbProject, mapKbVersion, mapKbColumn, mapReleaseMilestone,
   mapTicketComment, mapTicketAttachment, mapTicketLabel,
   mapTeam,
-  mapSprint, mapSprintSnapshot, mapSavedFilter, mapTestDataRow, mapNotification,
+  mapSprint, mapSprintSnapshot, mapSavedFilter, mapTestDataRow, mapTestStep, mapNotification,
   mapDashboardWidget, mapWorkLog, mapBaseline, mapBaselineTicket,
-  mapStatusHistory, mapWatcher, mapProjectMember,
+  mapStatusHistory, mapFieldHistory, mapWatcher, mapProjectMember, mapWorkflowTransition, mapBoard, mapBoardStatus,
   bcrypt, jwt, JWT_SECRET,
   fs, path, UPLOADS_DIR,
   getSettings,
@@ -775,6 +924,12 @@ app.get("/api/auth/sso/callback", async (req, res) => {
 app.get("/api/users", requireRole(["admin"]), (req, res) => {
   const rows = db.prepare("SELECT id, email, name, role, roles, is_active, created_at, last_login, failed_attempts, locked_until FROM users ORDER BY created_at").all();
   ok(res, rows.map(r => ({ ...r, roles: parseUserRoles(r) })));
+});
+
+// Any logged-in user (not just admins) needs to resolve names for @mentions —
+// unlike the admin-only /api/users above, this exposes nothing but id+name.
+app.get("/api/users/mentionable", auth(), (req, res) => {
+  ok(res, db.prepare("SELECT id, name FROM users WHERE is_active=1 ORDER BY name").all());
 });
 
 app.post("/api/users", requireRole(["admin"]), (req, res) => {

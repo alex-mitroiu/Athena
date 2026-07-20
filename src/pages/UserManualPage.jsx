@@ -57,7 +57,7 @@ const UserManualPage = () => {
         <H3>Creating and moving tickets</H3>
         <P>Click <strong>＋ Add Ticket</strong> to create one. Drag a card between columns to change its status, or use the <strong>←</strong> / <strong>→</strong> buttons in the preview panel footer to step it one column at a time. Moving a ticket out of <Tag>In Testing</Tag> prompts a Pass/Fail outcome first.</P>
         <H3>Preview panel actions</H3>
-        <P>Clicking a card opens a preview on the right. Backlog and the previous/next status buttons stay directly in the footer since they're used constantly; everything else — <strong>Edit</strong>, <strong>Delete</strong>, and (for Epics) <strong>Coverage</strong> and <strong>Diagram</strong> — lives one click away behind the <Tag>⚙</Tag> button.</P>
+        <P>Clicking a card opens a preview on the right. Backlog and the previous/next status buttons stay directly in the footer since they're used constantly; everything else — <strong>Edit</strong>, <strong>Delete</strong>, and (for Epics) <strong>Coverage</strong> and <strong>Diagram</strong> — lives one click away behind the settings button.</P>
         <H3>Links</H3>
         <P>Open a ticket's Edit modal or its preview's Links tab to connect it to other tickets — <Tag>Relates to</Tag>, <Tag>Blocks</Tag>, <Tag>Duplicates</Tag>, or <Tag>Implements</Tag>. A Story also shows a read-only <strong>Tested By</strong> list of any Test Cases linked to it — see Test Management for how that link is created.</P>
         <H3>Backlog and WIP limits</H3>

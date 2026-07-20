@@ -6,6 +6,9 @@ import { toast } from "../toast";
 import Spinner from "../components/primitives/Spinner";
 import Badge from "../components/primitives/Badge";
 import { ConfirmModal } from "../components/primitives/Modal";
+import { Textarea } from "../components/primitives/Form";
+import { MarkdownView } from "../markdown";
+import ReleaseMilestonesPanel from "../components/shared/ReleaseMilestonesPanel";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -113,15 +116,8 @@ const VersionModal = ({ init, projectId, onSave, onCancel }) => {
             </select>
           </div>
           {inp("Release date", "releaseDate", "date")}
-          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-            <label style={{ fontFamily: T.body, fontSize: 11, fontWeight: 600,
-              color: T.textMuted, textTransform: "uppercase", letterSpacing: ".05em" }}>Description</label>
-            <textarea value={f.description} onChange={set("description")} rows={3}
-              placeholder="What does this release include?"
-              style={{ fontFamily: T.body, fontSize: 13, color: T.text, background: T.surface,
-                border: `1px solid ${T.border}`, borderRadius: 7, padding: "7px 10px",
-                outline: "none", resize: "vertical", width: "100%" }} />
-          </div>
+          <Textarea label="Description" value={f.description} onChange={v => setF(p => ({ ...p, description: v }))}
+            rows={3} placeholder="What does this release include?" />
         </div>
         <div style={{ padding: "12px 20px", borderTop: `1px solid ${T.border}`,
           display: "flex", gap: 8, justifyContent: "flex-end" }}>
@@ -307,7 +303,11 @@ export default function ReleasesPage() {
 
   return (
     <>
-      <div style={{ display: "flex", height: "100%", overflow: "hidden", fontFamily: T.body }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      <div style={{ flexShrink: 0, padding: "16px 20px 0" }}>
+        <ReleaseMilestonesPanel />
+      </div>
+      <div style={{ display: "flex", flex: 1, minHeight: 0, overflow: "hidden", fontFamily: T.body }}>
 
         {/* ── Left panel ── */}
         <div style={{ width: 220, flexShrink: 0, display: "flex", flexDirection: "column",
@@ -432,10 +432,7 @@ export default function ReleasesPage() {
                       )}
                     </div>
                     {selVer.description && (
-                      <div style={{ fontFamily: T.body, fontSize: 13, color: T.textMuted,
-                        marginTop: 4, lineHeight: 1.5 }}>
-                        {selVer.description}
-                      </div>
+                      <MarkdownView text={selVer.description} style={{ color: T.textMuted, marginTop: 4 }} />
                     )}
                   </div>
                   {canEdit && selVer.id !== "__unversioned__" && (
@@ -513,6 +510,7 @@ export default function ReleasesPage() {
           onCancel={() => setDeleteTarget(null)}
         />
       )}
+    </div>
     </>
   );
 }

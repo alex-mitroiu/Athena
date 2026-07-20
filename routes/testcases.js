@@ -1,7 +1,7 @@
 "use strict";
 
 module.exports = function testCasesRoutes(app, ctx) {
-  const { db, ok, err, uid, auth, requireRole, mapTestItem, mapTestCaseLink, mapTestDataRow,
+  const { db, ok, err, uid, auth, requireRole, mapTestItem, mapTestCaseLink, mapTestDataRow, mapTestStep,
           isProjectMember, accessibleProjectIds, isAdminUser } = ctx;
 
   const write = requireRole(["operator", "admin"]);
@@ -207,6 +207,78 @@ module.exports = function testCasesRoutes(app, ctx) {
     const info = db.prepare("DELETE FROM test_case_data_rows WHERE id=?").run(req.params.id);
     if (info.changes === 0) return err(res, "Not found", 404);
     ok(res, { deleted: req.params.id });
+  });
+
+  // ─── Test Case Steps (X-Ray style: Action / Test Data / Expected Result,   ───
+  // ─── each step executed and marked Pass/Fail/Blocked independently)        ───
+
+  const STEP_PASS = "Pass", STEP_FAIL = "Fail", STEP_BLOCKED = "Blocked";
+
+  // Roll the parent Test Case's overall status up from its steps' individual
+  // results — only when steps actually exist (a case with none keeps behaving
+  // exactly as before, driven entirely by the manual Pass/Fail/Blocked buttons).
+  const recomputeCaseStatus = (caseId) => {
+    const steps = db.prepare("SELECT status FROM test_case_steps WHERE case_id=?").all(caseId);
+    if (steps.length === 0) return;
+    let next;
+    if (steps.some(s => s.status === STEP_FAIL)) next = "Testing Failed";
+    else if (steps.some(s => s.status === STEP_BLOCKED)) next = "Cancelled";
+    else if (steps.every(s => s.status === STEP_PASS)) next = "Done";
+    else if (steps.some(s => s.status === STEP_PASS)) next = "In Testing";
+    else return; // every step still "Not Executed" — leave the case's own status alone
+    db.prepare("UPDATE test_items SET status=? WHERE id=?").run(next, caseId);
+  };
+
+  app.get("/api/test-items/:id/steps", auth(), (req, res) => {
+    const rows = db.prepare("SELECT * FROM test_case_steps WHERE case_id=? ORDER BY position ASC, created_at ASC").all(req.params.id);
+    ok(res, rows.map(mapTestStep));
+  });
+
+  app.post("/api/test-items/:id/steps", write, (req, res) => {
+    const { action = "", testData = "", expectedResult = "" } = req.body || {};
+    if (!db.prepare("SELECT id FROM test_items WHERE id=? AND type='Test Case'").get(req.params.id)) return err(res, "Test case not found", 404);
+    const pos = (db.prepare("SELECT MAX(position) AS m FROM test_case_steps WHERE case_id=?").get(req.params.id)?.m ?? -1) + 1;
+    const id  = `STP-${uid()}`;
+    const now = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO test_case_steps (id,case_id,position,action,test_data,expected_result,status,created_at)
+      VALUES (?,?,?,?,?,?, 'Not Executed', ?)
+    `).run(id, req.params.id, pos, action, testData, expectedResult, now);
+    ok(res, mapTestStep(db.prepare("SELECT * FROM test_case_steps WHERE id=?").get(id)), 201);
+  });
+
+  app.put("/api/steps/:id", write, (req, res) => {
+    const existing = db.prepare("SELECT * FROM test_case_steps WHERE id=?").get(req.params.id);
+    if (!existing) return err(res, "Not found", 404);
+    const {
+      action = existing.action, testData = existing.test_data, expectedResult = existing.expected_result,
+      status = existing.status, actualResult = existing.actual_result,
+    } = req.body || {};
+    const executedAt = status !== existing.status ? new Date().toISOString() : existing.executed_at;
+    const executedBy = status !== existing.status ? (req.user?.name || req.user?.email || "") : existing.executed_by;
+    db.prepare(`
+      UPDATE test_case_steps SET action=?, test_data=?, expected_result=?, status=?, actual_result=?,
+        executed_at=?, executed_by=? WHERE id=?
+    `).run(action, testData, expectedResult, status, actualResult || null, executedAt, executedBy, req.params.id);
+    recomputeCaseStatus(existing.case_id);
+    ok(res, mapTestStep(db.prepare("SELECT * FROM test_case_steps WHERE id=?").get(req.params.id)));
+  });
+
+  app.delete("/api/steps/:id", write, (req, res) => {
+    const existing = db.prepare("SELECT * FROM test_case_steps WHERE id=?").get(req.params.id);
+    if (!existing) return err(res, "Not found", 404);
+    db.prepare("DELETE FROM test_case_steps WHERE id=?").run(req.params.id);
+    ok(res, { deleted: req.params.id });
+  });
+
+  // Swap two steps' positions — the simplest reorder primitive, used by ↑/↓ row controls.
+  app.post("/api/steps/:id/swap/:otherId", write, (req, res) => {
+    const a = db.prepare("SELECT * FROM test_case_steps WHERE id=?").get(req.params.id);
+    const b = db.prepare("SELECT * FROM test_case_steps WHERE id=?").get(req.params.otherId);
+    if (!a || !b || a.case_id !== b.case_id) return err(res, "Not found", 404);
+    db.prepare("UPDATE test_case_steps SET position=? WHERE id=?").run(b.position, a.id);
+    db.prepare("UPDATE test_case_steps SET position=? WHERE id=?").run(a.position, b.id);
+    ok(res, { swapped: true });
   });
 
   // ─── Story Links (Test Case ↔ ticket, fixed "Tests" / "Is tested by") ─────

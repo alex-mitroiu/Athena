@@ -4,6 +4,7 @@ import { api } from "../api";
 import { useAuth } from "../AuthContext";
 import { toast } from "../toast";
 import Spinner from "../components/primitives/Spinner";
+import { Textarea } from "../components/primitives/Form";
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
@@ -70,6 +71,8 @@ export default function TestRunsPage() {
   const [search,    setSearch]    = useState("");
   const [planFilt,  setPlanFilt]  = useState("");
   const [collapsed, setCollapsed] = useState({});
+  const [modal,     setModal]     = useState(null); // { editTicket? }
+  const [saving,    setSaving]    = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -108,6 +111,22 @@ export default function TestRunsPage() {
     } catch { toast.error("Failed to update"); }
   };
 
+  const saveTicket = async (form, editId) => {
+    setSaving(true);
+    try {
+      if (editId) {
+        const existing = tickets.find(t => t.id === editId);
+        const updated  = await api.testItems.update(editId, { ...existing, ...form });
+        setTickets(p => p.map(t => t.id === editId ? updated : t));
+      } else {
+        const created = await api.testItems.create({ status: "Ready", ...form });
+        setTickets(p => [...p, created]);
+      }
+      setModal(null);
+    } catch { toast.error(editId ? "Failed to save" : "Failed to create"); }
+    finally { setSaving(false); }
+  };
+
   // ── Sub-components ─────────────────────────────────────────────────────────
 
   const ExecBtn = ({ label, title, color, onClick, active }) => {
@@ -123,6 +142,103 @@ export default function TestRunsPage() {
           display: "flex", alignItems: "center", justifyContent: "center", fontFamily: T.mono }}>
         {label}
       </button>
+    );
+  };
+
+  // ── Create / Edit modal (Test Run) ──────────────────────────────────────────
+
+  const TestRunFormModal = () => {
+    const { editTicket } = modal;
+    const isEdit = !!editTicket;
+
+    const [title,    setTitle]    = useState(editTicket?.title       ?? "");
+    const [desc,     setDesc]     = useState(editTicket?.description ?? "");
+    const [parentId, setParentId] = useState(editTicket?.parentId ?? planFilt ?? "");
+
+    const inp = { fontFamily: T.body, fontSize: 13, color: T.text, background: T.bg,
+      border: `1px solid ${T.border}`, borderRadius: 7, padding: "7px 10px",
+      outline: "none", width: "100%", boxSizing: "border-box" };
+    const lbl = txt => (
+      <div style={{ fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+        textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 4 }}>{txt}</div>
+    );
+
+    const handleSubmit = e => {
+      e.preventDefault();
+      if (!title.trim() || !parentId) return;
+      saveTicket({
+        type: "Test Run",
+        title: title.trim(),
+        parentId,
+        description: desc.trim() || null,
+      }, editTicket?.id ?? null);
+    };
+
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "#00000055", zIndex: 1000,
+        display: "flex", alignItems: "center", justifyContent: "center" }}
+        onClick={e => { if (e.target === e.currentTarget) setModal(null); }}>
+        <div style={{ background: T.surface, border: `1px solid ${T.border}`,
+          borderRadius: 12, padding: "24px 24px 20px", width: 480,
+          boxShadow: "0 8px 32px #0006", fontFamily: T.body }}>
+
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 18 }}>
+            {isEdit ? "Edit Test Run" : "New Test Run"}
+          </div>
+
+          {testPlans.length === 0 ? (
+            <div>
+              <p style={{ fontFamily: T.body, fontSize: 13, color: T.textMuted, lineHeight: 1.6, margin: "0 0 18px" }}>
+                A Test Run belongs to a Test Plan, and there are no Test Plans yet — create one first
+                (Test Plans page), then come back here to add a Run under it.
+              </p>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button type="button" onClick={() => setModal(null)}
+                  style={{ fontFamily: T.body, fontSize: 13, color: T.textMuted, background: "none",
+                    border: `1px solid ${T.border}`, borderRadius: 7, padding: "7px 16px", cursor: "pointer" }}>
+                  Close
+                </button>
+              </div>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div>
+                {lbl("Title")}
+                <input autoFocus value={title} onChange={e => setTitle(e.target.value)}
+                  placeholder="Test cycle title…" style={inp} />
+              </div>
+
+              <div>
+                {lbl("Test Plan")}
+                <select value={parentId} onChange={e => setParentId(e.target.value)}
+                  style={{ ...inp, cursor: "pointer" }}>
+                  <option value="">Select a plan…</option>
+                  {testPlans.map(p => <option key={p.id} value={p.id}>🧪 {p.title}</option>)}
+                </select>
+              </div>
+
+              <Textarea label="Description" value={desc} onChange={setDesc}
+                placeholder="What does this test cycle cover?" rows={3} />
+
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+                <button type="button" onClick={() => setModal(null)}
+                  style={{ fontFamily: T.body, fontSize: 13, color: T.textMuted, background: "none",
+                    border: `1px solid ${T.border}`, borderRadius: 7, padding: "7px 16px", cursor: "pointer" }}>
+                  Cancel
+                </button>
+                <button type="submit" disabled={saving || !title.trim() || !parentId}
+                  style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: "#fff",
+                    background: (title.trim() && parentId) ? T.accent : T.border, border: "none",
+                    borderRadius: 7, padding: "7px 18px",
+                    cursor: (title.trim() && parentId) ? "pointer" : "default",
+                    transition: "background .15s" }}>
+                  {saving ? "Saving…" : isEdit ? "Save Changes" : "Create Test Run"}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      </div>
     );
   };
 
@@ -182,6 +298,12 @@ export default function TestRunsPage() {
               </div>
             )}
           </div>
+          {canEdit && (
+            <button onClick={e => { e.stopPropagation(); setModal({ editTicket: run }); }}
+              style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 4,
+                color: T.textMuted, cursor: "pointer", fontSize: 11, padding: "2px 8px",
+                fontFamily: T.body, flexShrink: 0 }}>✎</button>
+          )}
           <SegBar stats={stats} width={100} />
           <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
             <Chip count={stats.passed}  color={JIRA_COLOR.Pass}    label="Pass" />
@@ -248,6 +370,14 @@ export default function TestRunsPage() {
             <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted }}>/ {testCases.length}</span>
           )}
         </div>
+        {canEdit && (
+          <button type="button" onClick={() => setModal({})}
+            style={{ fontFamily: T.body, fontSize: 12, fontWeight: 600, color: "#fff",
+              background: T.accent, border: "none", borderRadius: 7, padding: "6px 12px", cursor: "pointer",
+              flexShrink: 0 }}>
+            + New Test Run
+          </button>
+        )}
       </div>
 
       {/* Run list */}
@@ -261,6 +391,8 @@ export default function TestRunsPage() {
           visibleRuns.map(run => <RunCard key={run.id} run={run} />)
         )}
       </div>
+
+      {modal && <TestRunFormModal />}
     </div>
   );
 }

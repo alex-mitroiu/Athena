@@ -10,9 +10,12 @@ import Badge from "../components/primitives/Badge";
 import Spinner from "../components/primitives/Spinner";
 import ActionMenu from "../components/primitives/ActionMenu";
 import TestCaseStoryLinksPanel from "../components/shared/TestCaseStoryLinksPanel";
+import TestStepsPanel from "../components/shared/TestStepsPanel";
 import { Inp, Sel, Textarea } from "../components/primitives/Form";
 import { toast } from "../toast";
 import { downloadCSV } from "../csv";
+import { MarkdownView } from "../markdown";
+import { IconSettings } from "../components/primitives/Icon";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -31,12 +34,13 @@ const INVERSE_LABEL = { "Blocks": "Is blocked by", "Duplicates": "Is duplicated 
 // delivery work, a Requirement is the thing being satisfied. Linked via the
 // existing ticket_links mechanism (new "Satisfies" type) rather than a bespoke
 // relation table — no new backend concept needed beyond one more link_type value.
-const TYPES = ["Epic", "Requirement", "Story", "Feature", "Bug", "Improvement", "Task", "Chore"];
+const TYPES = ["Initiative", "Epic", "Requirement", "Story", "Feature", "Bug", "Improvement", "Task", "Chore"];
 const TEST_TYPES = ["Test Folder", "Test Plan", "Test Run", "Test Case"];
 const TEST_STATUSES = ["Ready", "In Progress", "In Testing", "Testing Failed", "Done", "Ready to Deploy", "Released", "Cancelled"];
 const TEST_PARENT_TYPES = { "Test Run": ["Test Plan"], "Test Case": ["Test Run", "Test Plan"] };
 
 const TYPE_ICON = {
+  Initiative:    "🧭",
   Epic:          "⚡",
   Requirement:   "📐",
   Story:         "📖",
@@ -52,6 +56,7 @@ const TYPE_ICON = {
 };
 
 const TYPE_VARIANT = {
+  Initiative:    "central",
   Epic:          "warning",
   Requirement:   "purple",
   Story:         "info",
@@ -748,7 +753,7 @@ const TestOutcomeModal = ({ ticket, onConfirm, onCancel }) => {
 
 // ─── Ticket Links Panel ───────────────────────────────────────────────────────
 
-const TicketLinksPanel = ({ ticketId, allTickets = [] }) => {
+const TicketLinksPanel = ({ ticketId, allTickets = [], hideLabel = false }) => {
   const [links,    setLinks]    = useState([]);
   const [adding,   setAdding]   = useState(false);
   const [search,   setSearch]   = useState("");
@@ -792,7 +797,7 @@ const TicketLinksPanel = ({ ticketId, allTickets = [] }) => {
 
   return (
     <div>
-      <div style={sectionLbl}>Links</div>
+      {!hideLabel && <div style={sectionLbl}>Links</div>}
 
       {links.map(l => (
         <div key={l.id} style={{ display: "flex", alignItems: "center", gap: 8,
@@ -1064,9 +1069,7 @@ const TicketCommentsPanel = ({ ticketId }) => {
                   </button>
                 )}
               </div>
-              <div style={{ fontFamily: T.body, fontSize: 12.5, color: T.text, lineHeight: 1.55, whiteSpace: "pre-wrap" }}>
-                {c.body}
-              </div>
+              <MarkdownView text={c.body} style={{ fontSize: 12.5, lineHeight: 1.55 }} />
             </div>
           ))}
         </div>
@@ -1074,7 +1077,7 @@ const TicketCommentsPanel = ({ ticketId }) => {
 
       {canEdit && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <Textarea value={body} onChange={setBody} placeholder="Write a comment…" rows={2} />
+          <Textarea value={body} onChange={setBody} placeholder="Write a comment…" rows={2} ticketId={ticketId} />
           <div style={{ display: "flex", justifyContent: "flex-end" }}>
             <Btn size="sm" disabled={!body.trim() || posting} onClick={handlePost}>
               {posting ? "Posting…" : "Post"}
@@ -1091,37 +1094,51 @@ const TicketCommentsPanel = ({ ticketId }) => {
 // ─── Time Tracking / Work Log (TKT-91OLB9) ────────────────────────────────────
 
 const TicketActivityPanel = ({ ticketId }) => {
-  const [history, setHistory] = useState(null); // null = loading
+  const [items, setItems] = useState(null); // null = loading
 
   useEffect(() => {
-    api.tickets.statusHistory(ticketId).then(setHistory).catch(() => setHistory([]));
+    setItems(null);
+    Promise.all([api.tickets.statusHistory(ticketId), api.tickets.fieldHistory(ticketId)])
+      .then(([statusRows, fieldRows]) => {
+        const merged = [
+          ...statusRows.map(h => ({ id: h.id, kind: "status", at: h.changedAt, byName: h.changedByName, fromStatus: h.fromStatus, toStatus: h.toStatus })),
+          ...fieldRows.map(h => ({ id: h.id, kind: "field", at: h.changedAt, byName: h.changedByName, field: h.field, fromValue: h.fromValue, toValue: h.toValue })),
+        ].sort((a, b) => new Date(a.at) - new Date(b.at));
+        setItems(merged);
+      })
+      .catch(() => setItems([]));
   }, [ticketId]);
 
   const sectionLbl = { fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
     textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 };
   const fmtWhen = d => new Date(d).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+  const fmtVal = v => (v === null || v === undefined || v === "") ? "—" : v;
 
-  if (history === null) return <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>Loading…</div>;
-  if (history.length === 0) return (
-    <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>No status changes recorded yet.</div>
+  if (items === null) return <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>Loading…</div>;
+  if (items.length === 0) return (
+    <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>No activity recorded yet.</div>
   );
 
   return (
     <div>
       <div style={sectionLbl}>Activity</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-        {history.map(h => (
-          <div key={h.id} style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "8px 10px",
+        {items.map(h => (
+          <div key={`${h.kind}-${h.id}`} style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "8px 10px",
             borderRadius: 7, background: T.bg, border: `1px solid ${T.border}` }}>
             <span style={{ fontFamily: T.body, fontSize: 12, color: T.text, flex: 1 }}>
-              {h.fromStatus ? (
-                <>Moved <strong>{h.fromStatus}</strong> → <strong style={{ color: T.accent }}>{h.toStatus}</strong></>
+              {h.kind === "status" ? (
+                h.fromStatus ? (
+                  <>Moved <strong>{h.fromStatus}</strong> → <strong style={{ color: T.accent }}>{h.toStatus}</strong></>
+                ) : (
+                  <>Created in <strong style={{ color: T.accent }}>{h.toStatus}</strong></>
+                )
               ) : (
-                <>Created in <strong style={{ color: T.accent }}>{h.toStatus}</strong></>
+                <>Changed <strong>{h.field}</strong> from <strong>{fmtVal(h.fromValue)}</strong> to <strong style={{ color: T.accent }}>{fmtVal(h.toValue)}</strong></>
               )}
             </span>
             <span style={{ fontFamily: T.body, fontSize: 10.5, color: T.textMuted, whiteSpace: "nowrap" }}>
-              {h.changedByName || "Someone"} · {fmtWhen(h.changedAt)}
+              {h.byName || "Someone"} · {fmtWhen(h.at)}
             </span>
           </div>
         ))}
@@ -1634,7 +1651,7 @@ const ParentPickerModal = ({ tickets = [], excludeId, onSelect, onClose, allowed
 
 // ─── Ticket Modal ─────────────────────────────────────────────────────────────
 
-const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], teams = [], versions = [], sprints = [], columns = COLUMNS, onSave, onCancel, onLabelsChanged }) => {
+const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], teams = [], versions = [], sprints = [], columns = COLUMNS, initiatives = [], onInitiativeCreated, currentProjectId, onSave, onCancel, onLabelsChanged }) => {
   const isEdit = !!init.id;
   const [f, setF] = useState({
     title:       init.title       || "",
@@ -1651,10 +1668,12 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], team
     startDate:   init.startDate   || "",
     dueDate:     init.dueDate     || "",
     parentId:    init.parentId    || "",
+    initiativeId: init.initiativeId || "",
     testNotes:   init.testNotes   || "",
     storyPoints: init.storyPoints ?? "",
     customFields: init.customFields || {},
   });
+  const [creatingInitiative, setCreatingInitiative] = useState(false);
   const [showParentPicker, setShowParentPicker] = useState(false);
   const set = k => v => setF(p => ({ ...p, [k]: v }));
   const valid = f.title.trim().length > 0;
@@ -1705,6 +1724,38 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], team
           </label>
           <input type="date" value={f.startDate} onChange={e => set("startDate")(e.target.value)}
             style={{ ...inputBase, fontFamily: T.mono, fontSize: 13, cursor: "pointer", colorScheme: "dark" }} />
+        </div>
+      )}
+
+      {f.type === "Epic" && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <label style={{ fontFamily: T.body, fontSize: 11, fontWeight: 600, color: T.textMuted,
+            textTransform: "uppercase", letterSpacing: ".06em" }}>
+            Initiative <span style={{ fontWeight: 400, textTransform: "none" }}>(optional — the program this Epic belongs to, can span projects)</span>
+          </label>
+          <div style={{ display: "flex", gap: 8 }}>
+            <select value={f.initiativeId} onChange={e => set("initiativeId")(e.target.value)}
+              style={{ ...inputBase, flex: 1, fontFamily: T.body, fontSize: 13, cursor: "pointer" }}>
+              <option value="">— None —</option>
+              {initiatives.map(i => <option key={i.id} value={i.id}>{i.title}</option>)}
+            </select>
+            <button type="button" onClick={async () => {
+                const name = window.prompt("New initiative name:");
+                if (!name || !name.trim()) return;
+                setCreatingInitiative(true);
+                try {
+                  const created = await api.tickets.create({ title: name.trim(), type: "Initiative", projectId: init.projectId || currentProjectId || null });
+                  onInitiativeCreated?.();
+                  set("initiativeId")(created.id);
+                } catch (e) { toast.error(e.message); }
+                finally { setCreatingInitiative(false); }
+              }}
+              disabled={creatingInitiative}
+              style={{ fontFamily: T.body, fontSize: 12, color: T.accent, background: "none",
+                border: `1px dashed ${T.accent}55`, borderRadius: 7, padding: "0 14px", cursor: "pointer", flexShrink: 0 }}>
+              + New
+            </button>
+          </div>
         </div>
       )}
 
@@ -1797,7 +1848,8 @@ const TicketModal = ({ init = {}, tickets = [], testItems = [], users = [], team
         />
       )}
       <Textarea label="Description" value={f.description} onChange={set("description")}
-        placeholder="What needs to be done, acceptance criteria, notes…" rows={4} />
+        placeholder="What needs to be done, acceptance criteria, notes…" rows={4}
+        ticketId={isEdit ? init.id : undefined} />
 
       {isEdit && <TicketLabelsPanel ticketId={init.id} onChange={onLabelsChanged} />}
 
@@ -1850,7 +1902,6 @@ const TestItemModal = ({ init = {}, testItems = [], tickets = [], users = [], ve
     assigneeId:  init.assigneeId  || "",
     dueDate:     init.dueDate     || "",
     parentId:    init.parentId    || "",
-    testNotes:   init.testNotes   || "",
   });
   const [showParentPicker, setShowParentPicker] = useState(false);
   const set = k => v => setF(p => ({ ...p, [k]: v }));
@@ -1956,14 +2007,26 @@ const TestItemModal = ({ init = {}, testItems = [], tickets = [], users = [], ve
       <Textarea label="Description" value={f.description} onChange={set("description")}
         placeholder="What is this verifying?" rows={4} />
 
-      {f.type === "Test Case" && (
-        <Textarea label="Test Notes / Steps" value={f.testNotes} onChange={set("testNotes")}
-          placeholder={"Steps to reproduce or test steps:\n1. Navigate to…\n2. Enter…\n3. Verify that…"} rows={4} />
-      )}
-
       {isEdit && (
         <Sel label="Status" value={f.status} onChange={set("status")}
           options={TEST_STATUSES.map(s => ({ value: s, label: s }))} />
+      )}
+
+      {f.type === "Test Case" && init.testNotes && (
+        <div>
+          <label style={{ fontFamily: T.body, fontSize: 11, fontWeight: 600, color: T.textMuted,
+            textTransform: "uppercase", letterSpacing: ".06em" }}>Legacy Notes (unstructured)</label>
+          <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7,
+            padding: "8px 12px", marginTop: 4 }}>
+            <MarkdownView text={init.testNotes} style={{ fontSize: 12.5 }} />
+          </div>
+        </div>
+      )}
+
+      {isEdit && f.type === "Test Case" && (
+        <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 14 }}>
+          <TestStepsPanel caseId={init.id} />
+        </div>
       )}
 
       {isEdit && f.type === "Test Case" && (
@@ -2237,16 +2300,78 @@ const TicketCard = ({ ticket, onEdit, onDelete, onMove, onPreview, onDiagram, on
 
 // ─── Ticket Preview Panel ─────────────────────────────────────────────────────
 
+const TICKET_PREVIEW_WIDTH_KEY = "athena_ticket_preview_width";
+const TICKET_PREVIEW_MIN_WIDTH = 320;
+const TICKET_PREVIEW_MAX_WIDTH = 720;
+
+// Slim jump-to-section rail for the Overview tab — scrolls within the tab's
+// own scroll container (scrollIntoView finds the nearest scrollable ancestor),
+// not the page, so this works regardless of where the panel sits on screen.
+const TicketOverviewNav = ({ sections }) => {
+  const jump = id => document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  return (
+    <div style={{ width: 38, flexShrink: 0, borderLeft: `1px solid ${T.border}`,
+      display: "flex", flexDirection: "column", alignItems: "center", gap: 2, padding: "10px 0" }}>
+      {sections.map(s => (
+        <button key={s.id} type="button" onClick={() => jump(s.id)} title={s.label}
+          style={{ background: "none", border: "none", cursor: "pointer", fontSize: 15,
+            padding: "6px 0", width: "100%", color: T.textMuted, transition: "color .12s" }}
+          onMouseEnter={e => e.currentTarget.style.color = T.accent}
+          onMouseLeave={e => e.currentTarget.style.color = T.textMuted}>
+          {s.icon}
+        </button>
+      ))}
+    </div>
+  );
+};
+
 const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams = [], onClose, onEdit, onMove, onDelete, onPreview, onDiagram, onCoverage, columns = COLUMNS, onLabelsChanged, onCascade, onTicketUpdated }) => {
   const { user, canEdit } = useAuth();
   const [confirm,    setConfirm]    = useState(false);
-  const [tab,        setTab]        = useState("overview"); // "overview" | "links" | "order" | "comments" | "files"
+  const [tab,        setTab]        = useState("overview"); // "overview" | "order" | "time" | "activity"
   const [links,      setLinks]      = useState(null);       // null = not yet fetched
   const [childLinks, setChildLinks] = useState(null);       // per-child link map
   const [cascadeOpen, setCascadeOpen] = useState(false);
   const [estimateOpen, setEstimateOpen] = useState(false);
   const [watching,   setWatching]   = useState(false);
   const [watcherCount, setWatcherCount] = useState(0);
+
+  // Resizable width (TKT — panel width persists across sessions). The handle
+  // sits on the panel's left edge; dragging it left widens the panel since the
+  // panel itself is anchored/flex-shrink-0 on the right side of the board row.
+  const [width, setWidth] = useState(() => {
+    const saved = Number(localStorage.getItem(TICKET_PREVIEW_WIDTH_KEY));
+    return saved >= TICKET_PREVIEW_MIN_WIDTH && saved <= TICKET_PREVIEW_MAX_WIDTH ? saved : TICKET_PREVIEW_MIN_WIDTH;
+  });
+  const resizeRef = useRef(null); // { startX, startWidth } while dragging, else null
+
+  const startResize = e => {
+    e.preventDefault();
+    resizeRef.current = { startX: e.clientX, startWidth: width };
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+  };
+
+  useEffect(() => {
+    const onMove = e => {
+      if (!resizeRef.current) return;
+      const delta = resizeRef.current.startX - e.clientX;
+      setWidth(Math.min(TICKET_PREVIEW_MAX_WIDTH, Math.max(TICKET_PREVIEW_MIN_WIDTH, resizeRef.current.startWidth + delta)));
+    };
+    const onUp = () => {
+      if (!resizeRef.current) return;
+      resizeRef.current = null;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setWidth(w => { localStorage.setItem(TICKET_PREVIEW_WIDTH_KEY, String(w)); return w; });
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    return () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+  }, []);
 
   useEffect(() => {
     api.tickets.watchers(ticket.id).then(rows => {
@@ -2283,12 +2408,11 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
     setChildLinks(null);
   }, [ticket.id]);
 
-  // Fetch this ticket's links lazily on first non-overview tab open
+  // Links now live on the Overview page itself (no longer a separate tab the
+  // user has to switch to), so fetch them immediately rather than lazily.
   useEffect(() => {
-    if (tab !== "overview" && links === null) {
-      api.tickets.links(ticket.id).then(setLinks).catch(() => setLinks([]));
-    }
-  }, [tab, ticket.id, links]);
+    api.tickets.links(ticket.id).then(setLinks).catch(() => setLinks([]));
+  }, [ticket.id]);
 
   // Fetch per-child links lazily when Order tab opens on a parent ticket
   useEffect(() => {
@@ -2372,6 +2496,11 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
           </span>
         )}
         {metaRow("Type", <Badge variant={TYPE_VARIANT[ticket.type] || "default"}>{ticket.type}</Badge>)}
+        {ticket.initiativeId && metaRow("Initiative",
+          <span style={{ fontFamily: T.body, fontSize: 12, color: T.text, display: "flex", alignItems: "center", gap: 5 }}>
+            <span>{TYPE_ICON.Initiative}</span>{ticket.initiativeName || ticket.initiativeId}
+          </span>
+        )}
         {metaRow("Priority", <Badge variant={PRIORITY_VARIANT[ticket.priority] || "default"}>{ticket.priority}</Badge>)}
         {ticket.storyPoints != null && metaRow("Story Points",
           <span style={{ fontFamily: T.mono, fontSize: 12, fontWeight: 700, color: T.text,
@@ -2426,10 +2555,7 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
           </span>
         )}
         {ticket.testNotes && metaRow("Test notes",
-          <span style={{ fontFamily: T.body, fontSize: 12, color: T.text,
-            lineHeight: 1.5, whiteSpace: "pre-wrap" }}>
-            {ticket.testNotes}
-          </span>
+          <MarkdownView text={ticket.testNotes} style={{ fontSize: 12 }} />
         )}
         {Object.entries(ticket.customFields || {}).map(([k, v]) => metaRow(k,
           <span key={k} style={{ fontFamily: T.body, fontSize: 12, color: T.text }}>{v}</span>
@@ -2438,15 +2564,13 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
 
       <TicketLabelsPanel ticketId={ticket.id} onChange={onLabelsChanged} />
 
-      <div>
+      <div id="sec-description">
         <div style={{ fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
           textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 }}>
           Description
         </div>
         {ticket.description ? (
-          <div style={{ fontFamily: T.body, fontSize: 13, color: T.text, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>
-            {ticket.description}
-          </div>
+          <MarkdownView text={ticket.description} />
         ) : (
           <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>
             No description provided.
@@ -2454,8 +2578,16 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
         )}
       </div>
 
+      <div id="sec-links" style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16 }}>
+        <div style={{ fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+          textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8 }}>
+          Links
+        </div>
+        {renderLinks()}
+      </div>
+
       {children.length > 0 && (
-        <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16 }}>
+        <div id="sec-children" style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16 }}>
           <div style={{ fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
             textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 8,
             display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -2501,6 +2633,14 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
           </div>
         </div>
       )}
+
+      <div id="sec-comments" style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16 }}>
+        <TicketCommentsPanel ticketId={ticket.id} />
+      </div>
+
+      <div id="sec-files" style={{ borderTop: `1px solid ${T.border}`, paddingTop: 16 }}>
+        <TicketAttachmentsPanel ticketId={ticket.id} />
+      </div>
     </>
   );
 
@@ -2595,7 +2735,7 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
         )}
 
         <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
-          <TicketLinksPanel ticketId={ticket.id} allTickets={tickets} />
+          <TicketLinksPanel ticketId={ticket.id} allTickets={tickets} hideLabel />
         </div>
       </div>
     );
@@ -2620,7 +2760,7 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
             No ordering constraints defined.
           </div>
           <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, lineHeight: 1.65 }}>
-            On the <strong style={{ color: T.text }}>Links</strong> tab, add a{" "}
+            In the <strong style={{ color: T.text }}>Links</strong> section on Overview, add a{" "}
             <strong style={{ color: T.text }}>Blocks</strong> link to mark what this ticket must be
             completed before, or <strong style={{ color: T.text }}>Is blocked by</strong> to declare
             a prerequisite.
@@ -2775,7 +2915,7 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
 
   return (
     <div style={{
-      width: 320, flexShrink: 0,
+      width, flexShrink: 0,
       background: T.surface,
       border: `1px solid ${T.border}`,
       borderTop: `3px solid ${COL_ACCENT[ticket.status] || T.accent}`,
@@ -2783,7 +2923,17 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
       display: "flex", flexDirection: "column",
       overflow: "hidden",
       alignSelf: "stretch",
+      position: "relative",
     }}>
+      {/* Resize handle — sits just inside the left edge (not outside it) so it
+          isn't clipped by this panel's own overflow:hidden. */}
+      <div
+        onMouseDown={startResize}
+        title="Drag to resize"
+        style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 6, cursor: "col-resize", zIndex: 2 }}
+        onMouseEnter={e => { e.currentTarget.style.background = `${T.accent}33`; }}
+        onMouseLeave={e => { e.currentTarget.style.background = "transparent"; }}
+      />
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between",
         padding: "10px 14px", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
@@ -2839,25 +2989,37 @@ const TicketPreview = ({ ticket, colIndex, tickets, testItems = [], users, teams
       {/* Tab bar */}
       <div style={{ display: "flex", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
         {tabBtn("overview", "Overview")}
-        {tabBtn("links", "🔗 Links")}
         {tabBtn("order", "📋 Order")}
-        {tabBtn("comments", "💬 Comments")}
-        {tabBtn("files", "📎 Files")}
         {tabBtn("time", "⏱ Time")}
         {tabBtn("activity", "🕐 Activity")}
       </div>
 
-      {/* Scrollable body */}
-      <div style={{ flex: 1, overflowY: "auto", padding: "16px",
-        display: "flex", flexDirection: "column", gap: 16 }}>
-        {tab === "overview" && renderOverview()}
-        {tab === "links"    && renderLinks()}
-        {tab === "order"    && renderOrder()}
-        {tab === "comments" && <TicketCommentsPanel ticketId={ticket.id} />}
-        {tab === "files"    && <TicketAttachmentsPanel ticketId={ticket.id} />}
-        {tab === "time"     && <TicketWorkLogPanel ticketId={ticket.id} />}
-        {tab === "activity" && <TicketActivityPanel ticketId={ticket.id} />}
-      </div>
+      {/* Scrollable body — Overview gets a quick-nav rail since it now folds in
+          Links, Comments, and Files (matching Jira: these live on the main
+          view, not behind their own tabs, since they're what people check
+          most often). */}
+      {tab === "overview" ? (
+        <div style={{ flex: 1, minHeight: 0, display: "flex" }}>
+          <div style={{ flex: 1, minWidth: 0, overflowY: "auto", padding: "16px",
+            display: "flex", flexDirection: "column", gap: 16 }}>
+            {renderOverview()}
+          </div>
+          <TicketOverviewNav sections={[
+            { id: "sec-description", icon: "📝", label: "Description" },
+            { id: "sec-links",    icon: "🔗", label: "Links" },
+            ...(children.length > 0 ? [{ id: "sec-children", icon: "🧩", label: "Children" }] : []),
+            { id: "sec-comments", icon: "💬", label: "Comments" },
+            { id: "sec-files",    icon: "📎", label: "Files" },
+          ]} />
+        </div>
+      ) : (
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px",
+          display: "flex", flexDirection: "column", gap: 16 }}>
+          {tab === "order"    && renderOrder()}
+          {tab === "time"     && <TicketWorkLogPanel ticketId={ticket.id} />}
+          {tab === "activity" && <TicketActivityPanel ticketId={ticket.id} />}
+        </div>
+      )}
 
       {/* Actions footer */}
       <div style={{ padding: "10px 14px", borderTop: `1px solid ${T.border}`,
@@ -3288,11 +3450,11 @@ const KanbanColumn = ({ status, tickets, allTickets, onEdit, onDelete, onMove, o
             <button type="button" onClick={() => { setWipInput(wipLimit ?? ""); setEditingWip(true); }}
               title={wipLimit ? `WIP limit: ${wipLimit} — click to change` : "Set WIP limit"}
               style={{ background: "none", border: "none", cursor: "pointer",
-                color: wipLimit ? T.accent : T.border, fontSize: 13, lineHeight: 1,
+                color: wipLimit ? T.accent : T.border, lineHeight: 1, display: "flex", alignItems: "center",
                 padding: "2px 4px", opacity: 0.7, transition: "opacity .15s, color .15s" }}
               onMouseEnter={e => e.currentTarget.style.opacity = "1"}
               onMouseLeave={e => e.currentTarget.style.opacity = "0.7"}>
-              ⚙
+              <IconSettings size={13} />
             </button>
           )}
         </div>
@@ -3559,6 +3721,7 @@ const BmEditForm = ({ onSave, onCancel, saving, children }) => (
     </div>
   </div>
 );
+
 
 // ─── Board Manager Modal ──────────────────────────────────────────────────────
 // Tabbed manager for Projects, Columns, and Versions.
@@ -4079,9 +4242,16 @@ const BurndownChart = ({ sprint, data }) => {
   );
 };
 
-const SprintBoardView = ({ sprints, activeSprintId, setActiveSprintId, tickets, onPreview }) => {
+const SprintBoardView = ({ sprints, activeSprintId, setActiveSprintId, tickets, teams = [], onPreview }) => {
   const [burndown, setBurndown] = useState(null);
   const [loading,  setLoading]  = useState(true);
+  const [pointsPerPerson, setPointsPerPerson] = useState(8); // fallback until the admin setting loads
+  useEffect(() => {
+    api.settings.get().then(s => {
+      const v = Number(s.capacity_points_per_person_per_sprint);
+      if (v > 0) setPointsPerPerson(v);
+    }).catch(() => {});
+  }, []);
 
   const current = sprints.find(s => s.id === activeSprintId)
     || sprints.find(s => s.status === "Active")
@@ -4106,6 +4276,19 @@ const SprintBoardView = ({ sprints, activeSprintId, setActiveSprintId, tickets, 
   const sprintTickets = tickets.filter(t => t.sprintId === current.id);
   const byCol = {};
   for (const t of sprintTickets) (byCol[t.status] ||= []).push(t);
+
+  // Team capacity (TKT-638U24) — headcount × an admin-configurable points-per-
+  // person-per-sprint constant (Application Settings), same precedent as the
+  // Monte Carlo estimator's own admin-calibrated numbers, compared against
+  // this team's own allocated points for the sprint. Only teams with at least
+  // one ticket in this sprint are shown — an empty capacity row for every team
+  // in the org regardless of relevance would just be noise.
+  const capacityByTeam = teams.map(team => {
+    const teamTickets = sprintTickets.filter(t => t.teamId === team.id);
+    const allocated = teamTickets.reduce((sum, t) => sum + (t.storyPoints || 0), 0);
+    const capacity = team.members.length * pointsPerPerson;
+    return { team, allocated, capacity, ticketCount: teamTickets.length };
+  }).filter(c => c.ticketCount > 0);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16, paddingBottom: 24 }}>
@@ -4139,6 +4322,49 @@ const SprintBoardView = ({ sprints, activeSprintId, setActiveSprintId, tickets, 
                     <div style={{ fontFamily: T.head, fontSize: 20, fontWeight: 700, color: T.text }}>{val}</div>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {capacityByTeam.length > 0 && (
+            <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: "12px 16px" }}>
+              <div style={{ fontFamily: T.body, fontSize: 11, fontWeight: 700, color: T.textMuted,
+                textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 10 }}>
+                Team Capacity
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {capacityByTeam.map(({ team, allocated, capacity, ticketCount }) => {
+                  const over = allocated > capacity;
+                  const pct = capacity > 0 ? Math.min(Math.round(allocated / capacity * 100), 999) : 0;
+                  return (
+                    <div key={team.id} style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <span style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0, background: team.color }} />
+                      <span style={{ fontFamily: T.body, fontSize: 12.5, color: T.text, fontWeight: 600,
+                        width: 130, flexShrink: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {team.name}
+                      </span>
+                      <span style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted, width: 90, flexShrink: 0 }}>
+                        {team.members.length} people
+                      </span>
+                      <div style={{ flex: 1, height: 6, borderRadius: 3, background: T.border, overflow: "hidden" }}>
+                        <div style={{ height: "100%", width: `${Math.min(pct, 100)}%`, borderRadius: 3,
+                          background: over ? T.danger : T.success, transition: "width .3s" }} />
+                      </div>
+                      <span style={{ fontFamily: T.mono, fontSize: 11, fontWeight: over ? 700 : 400,
+                        color: over ? T.danger : T.textMuted, width: 100, flexShrink: 0, textAlign: "right" }}>
+                        {allocated}/{capacity} pts
+                      </span>
+                      {over && (
+                        <span title={`${ticketCount} ticket${ticketCount !== 1 ? "s" : ""} allocated ${allocated} pts against a ${capacity}-pt capacity (${team.members.length} × ${pointsPerPerson})`}
+                          style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.danger,
+                            background: T.dangerBg, border: `1px solid ${T.danger}44`, borderRadius: 4,
+                            padding: "1px 6px", flexShrink: 0 }}>
+                          ⚠ Over
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -4191,9 +4417,55 @@ const SprintBoardView = ({ sprints, activeSprintId, setActiveSprintId, tickets, 
 // Epics missing either date are listed separately rather than silently dropped,
 // since a partially-dated Epic is exactly the kind of gap a roadmap should surface.
 
+// Dependency mapping (TKT-D01O9T) — "Blocks" links already exist on tickets;
+// this walks that graph among a given set of node ids to find the longest
+// blocking chain ("critical path" — the sequence of epics where a slip in any
+// one visibly threatens every epic after it). A simple memoized DFS rather
+// than a full topological-sort longest-path, since epic counts per Gantt view
+// are small; a visiting-set guard makes a bad cycle a no-op instead of an
+// infinite loop rather than assuming the data is always a clean DAG.
+const computeCriticalPath = (nodeIds, edges) => {
+  const adj = new Map(nodeIds.map(id => [id, []]));
+  for (const e of edges) if (adj.has(e.from) && adj.has(e.to)) adj.get(e.from).push(e.to);
+  const memo = new Map();
+  const visiting = new Set();
+  const longestFrom = id => {
+    if (memo.has(id)) return memo.get(id);
+    if (visiting.has(id)) return { length: 0, path: [] }; // cycle re-entry: stop here, don't duplicate the node
+    visiting.add(id);
+    let best = { length: 0, path: [id] };
+    for (const next of adj.get(id) || []) {
+      const sub = longestFrom(next);
+      if (sub.length + 1 > best.length) best = { length: sub.length + 1, path: [id, ...sub.path] };
+    }
+    visiting.delete(id);
+    memo.set(id, best);
+    return best;
+  };
+  let overall = { length: 0, path: [] };
+  for (const id of nodeIds) {
+    const r = longestFrom(id);
+    if (r.length > overall.length) overall = r;
+  }
+  return overall.path;
+};
+
 const GanttChart = ({ epics, onPreview }) => {
   const dated   = epics.filter(e => e.startDate && e.dueDate);
   const undated = epics.filter(e => !e.startDate || !e.dueDate);
+
+  const [links, setLinks] = useState([]);
+  const datedIds = dated.map(e => e.id).join(",");
+  useEffect(() => {
+    if (!datedIds) { setLinks([]); return; }
+    api.tickets.linksAmong(datedIds.split(",")).then(setLinks).catch(() => setLinks([]));
+  }, [datedIds]);
+
+  const blockEdges = links.filter(l => l.linkType === "Blocks").map(l => ({ from: l.fromId, to: l.toId }));
+  const criticalPath = computeCriticalPath(dated.map(e => e.id), blockEdges);
+  const criticalSet = new Set(criticalPath);
+  const blockedBy = id => links.filter(l => l.linkType === "Blocks" && l.toId === id).map(l => l.fromId);
+  const blocks = id => links.filter(l => l.linkType === "Blocks" && l.fromId === id).map(l => l.toId);
 
   if (dated.length === 0) return (
     <div style={{ padding: "60px 24px", textAlign: "center", fontFamily: T.body, fontSize: 14, color: T.textMuted }}>
@@ -4214,6 +4486,29 @@ const GanttChart = ({ epics, onPreview }) => {
 
   return (
     <div style={{ paddingBottom: 24 }}>
+      {criticalPath.length > 1 && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+          background: T.dangerBg, border: `1px solid ${T.danger}44`, borderRadius: 8,
+          padding: "9px 14px", marginBottom: 12 }}>
+          <span style={{ fontSize: 14 }}>⚠</span>
+          <span style={{ fontFamily: T.body, fontSize: 12, fontWeight: 700, color: T.danger }}>
+            Critical path ({criticalPath.length} Epics):
+          </span>
+          {criticalPath.map((id, i) => {
+            const e = dated.find(x => x.id === id);
+            return (
+              <span key={id} style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                {i > 0 && <span style={{ color: T.textMuted, fontSize: 11 }}>→</span>}
+                <button type="button" onClick={() => onPreview?.(e)}
+                  style={{ background: "none", border: "none", cursor: "pointer", padding: 0,
+                    fontFamily: T.mono, fontSize: 11, color: T.danger, textDecoration: "underline dotted" }}>
+                  {id}
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
       <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
         <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 18px",
           borderBottom: `1px solid ${T.border}`, background: T.bg,
@@ -4233,12 +4528,21 @@ const GanttChart = ({ epics, onPreview }) => {
             const width = Math.max(((e - s) / totalSpan) * 100, 1.5);
             const done  = DONE_STATUSES.has(epic.status);
             const overdue = !done && e < todayMs;
+            const isCritical = criticalSet.has(epic.id);
+            const deps = blockedBy(epic.id), blocksList = blocks(epic.id);
+            const hasDeps = deps.length > 0 || blocksList.length > 0;
+            const depTitle = [
+              deps.length ? `Blocked by: ${deps.join(", ")}` : null,
+              blocksList.length ? `Blocks: ${blocksList.join(", ")}` : null,
+            ].filter(Boolean).join(" · ");
             return (
               <div key={epic.id} style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 14 }}>
                 <div style={{ width: 200, flexShrink: 0, minWidth: 0, fontFamily: T.body, fontSize: 12,
-                  color: T.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                  color: T.text, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                  display: "flex", alignItems: "center", gap: 4 }}
                   title={epic.title}>
-                  {epic.title}
+                  {hasDeps && <span title={depTitle} style={{ fontSize: 11, flexShrink: 0 }}>🔗</span>}
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{epic.title}</span>
                 </div>
                 <div style={{ position: "relative", flex: 1, height: 22 }}>
                   <div onClick={() => onPreview?.(epic)}
@@ -4246,8 +4550,9 @@ const GanttChart = ({ epics, onPreview }) => {
                       borderRadius: 5, cursor: "pointer",
                       background: done ? T.success : overdue ? T.danger : T.accent,
                       opacity: done ? 0.55 : 1,
+                      boxShadow: isCritical ? `0 0 0 2px ${T.danger}` : "none",
                       display: "flex", alignItems: "center", paddingLeft: 8, minWidth: 20 }}
-                    title={`${epic.startDate} → ${epic.dueDate}${overdue ? " · Overdue" : ""}`}>
+                    title={`${epic.startDate} → ${epic.dueDate}${overdue ? " · Overdue" : ""}${isCritical ? " · On critical path" : ""}`}>
                     <span style={{ fontFamily: T.mono, fontSize: 9, color: "#fff", fontWeight: 700,
                       overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                       {epic.id}
@@ -4282,7 +4587,7 @@ const GanttChart = ({ epics, onPreview }) => {
   );
 };
 
-const RoadmapView = ({ tickets, versions, onPreview }) => {
+export const RoadmapView = ({ tickets, versions, onPreview }) => {
   const [mode, setMode] = useState("swimlanes"); // "swimlanes" | "gantt"
   const epics = tickets.filter(t => t.type === "Epic");
 
@@ -4537,11 +4842,17 @@ const TestItemPreview = ({ item, testItems, tickets, onClose, onEdit, onDelete, 
         {item.testNotes && (
           <div>
             <div style={{ fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
-              textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 6 }}>Test Steps</div>
+              textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 6 }}>Legacy Notes (unstructured)</div>
             <div style={{ fontFamily: T.body, fontSize: 13, color: T.text, lineHeight: 1.7, whiteSpace: "pre-wrap",
               background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7, padding: "10px 14px" }}>
               {item.testNotes}
             </div>
+          </div>
+        )}
+
+        {item.type === "Test Case" && (
+          <div style={{ borderTop: `1px solid ${T.border}`, paddingTop: 12 }}>
+            <TestStepsPanel caseId={item.id} />
           </div>
         )}
 
@@ -4793,14 +5104,16 @@ const ReportCumulativeFlow = ({ projectId, columns }) => {
   );
 };
 
-const rtThStyle = { textAlign: "left", padding: "8px 14px", fontFamily: T.mono, fontSize: 10.5,
-  fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: ".06em",
-  borderBottom: `1px solid ${T.border}` };
-const rtTdStyle = { padding: "8px 14px", fontFamily: T.body, fontSize: 12.5, color: T.text,
-  borderBottom: `1px solid ${T.border}` };
-
 const ReportCycleTime = ({ projectId }) => {
   const [data, setData] = useState(null);
+
+  // Recomputed on every render (not a module-level constant) so it re-reads T
+  // fresh on a theme switch instead of freezing whatever was active on load.
+  const rtThStyle = { textAlign: "left", padding: "8px 14px", fontFamily: T.mono, fontSize: 10.5,
+    fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: ".06em",
+    borderBottom: `1px solid ${T.border}` };
+  const rtTdStyle = { padding: "8px 14px", fontFamily: T.body, fontSize: 12.5, color: T.text,
+    borderBottom: `1px solid ${T.border}` };
 
   useEffect(() => {
     setData(null);
@@ -5648,12 +5961,33 @@ const KanbanPage = () => {
   const [sprints,        setSprints]        = useState([]);
   const [activeSprintId, setActiveSprintId] = useState(null);
 
-  // colNames: ordered column names for the current project (or fallback to hardcoded)
-  const colNames = columns.length > 0 ? columns.map(c => c.name) : COLUMNS;
+  // Boards (TKT-G3AY4J) — a board is a filtered view over a subset of the
+  // current project's shared statuses; every project always has at least one
+  // (auto-created "Main Board" covering everything, for projects that predate
+  // this feature).
+  const [boards,         setBoards]         = useState([]);
+  const [currentBoard,   setCurrentBoard]   = useState(null);
+  const [boardStatuses,  setBoardStatuses]  = useState([]);
+
+  // colNames: the current board's assigned statuses, in its own order — falls
+  // back to every project column (or the hardcoded default) only when no board
+  // has loaded yet.
+  const colNames = currentBoard
+    ? boardStatuses.map(s => s.status)
+    : (columns.length > 0 ? columns.map(c => c.name) : COLUMNS);
 
   const [diagramTicket,      setDiagramTicket]      = useState(null);
   const [coverageTicket,     setCoverageTicket]     = useState(null);
   const [testOutcomePending, setTestOutcomePending] = useState(null);
+
+  // Initiatives (TKT-U2SCAK) — an Epic's parent "program" can live in any
+  // project, so this is loaded once, unscoped, rather than per-project like
+  // `tickets` above (same unscoped-list pattern RoadmapPage uses).
+  const [initiatives, setInitiatives] = useState([]);
+  const loadInitiatives = useCallback(() => {
+    api.tickets.list({}).then(all => setInitiatives(all.filter(t => t.type === "Initiative"))).catch(() => {});
+  }, []);
+  useEffect(() => { loadInitiatives(); }, [loadInitiatives]);
 
   const [wipLimits, setWipLimits] = useState(() => {
     try { return JSON.parse(localStorage.getItem("athena_wip_limits") || "{}"); }
@@ -5672,16 +6006,17 @@ const KanbanPage = () => {
   const preview     = previewId     ? tickets.find(t => t.id === previewId) ?? null : null;
   const testPreview = testPreviewId ? testItems.find(t => t.id === testPreviewId) ?? null : null;
 
-  const loadBoard = useCallback(async (proj) => {
+  const loadBoard = useCallback(async (proj, preferredBoardId) => {
     setLoading(true);
     const safe = p => p.catch(() => []);
-    const [tix, tst, cols, vers, sprs, lbls] = await Promise.all([
+    const [tix, tst, cols, vers, sprs, lbls, brds] = await Promise.all([
       safe(api.tickets.list(proj ? { projectId: proj.id } : {})),
       safe(api.testItems.list(proj ? { projectId: proj.id } : {})),
       proj ? safe(api.kbColumns.list(proj.id))  : Promise.resolve([]),
       proj ? safe(api.kbVersions.list(proj.id)) : Promise.resolve([]),
       proj ? safe(api.sprints.list(proj.id))    : Promise.resolve([]),
       safe(api.labels.list()),
+      proj ? safe(api.boards.list(proj.id))     : Promise.resolve([]),
     ]);
     setTickets(tix);
     setTestItems(tst);
@@ -5689,6 +6024,10 @@ const KanbanPage = () => {
     setVersions(vers);
     setSprints(sprs);
     setAllLabels(lbls);
+    setBoards(brds);
+    const board = brds.find(b => b.id === preferredBoardId) || brds[0] || null;
+    setCurrentBoard(board);
+    setBoardStatuses(board ? await safe(api.boards.statuses(board.id)) : []);
     setLoading(false);
   }, []);
 
@@ -5696,18 +6035,27 @@ const KanbanPage = () => {
     try {
       const projs = await api.kbProjects.list();
       setProjects(projs);
-      const proj = projs[0] || null;
+      const proj = projs.find(p => p.id === currentProject?.id) || projs[0] || null;
       if (proj && !currentProject) setCurrentProject(proj);
-      await loadBoard(proj || currentProject);
+      await loadBoard(proj || currentProject, currentBoard?.id);
     } catch {
       await loadBoard(null);
     }
-  }, [currentProject, loadBoard]);
+  }, [currentProject, currentBoard, loadBoard]);
 
   const switchProject = async proj => {
     setCurrentProject(proj);
     exitBulkMode();
     await loadBoard(proj);
+  };
+
+  const switchBoard = async board => {
+    setCurrentBoard(board);
+    exitBulkMode();
+    setLoading(true);
+    try { setBoardStatuses(await api.boards.statuses(board.id)); }
+    catch { setBoardStatuses([]); }
+    setLoading(false);
   };
 
   useEffect(() => {
@@ -5752,7 +6100,15 @@ const KanbanPage = () => {
       ...(testNotes !== undefined ? { testNotes } : {}),
     };
     setTickets(prev => prev.map(t => t.id === ticket.id ? updated : t));
-    await api.tickets.update(ticket.id, updated);
+    try {
+      await api.tickets.update(ticket.id, updated);
+    } catch (e) {
+      // Rejected (e.g. a workflow transition requirement isn't met yet) — revert
+      // the optimistic move so the card doesn't visually sit somewhere it never
+      // actually landed, and say exactly why.
+      setTickets(prev => prev.map(t => t.id === ticket.id ? ticket : t));
+      toast.error(e.message);
+    }
   };
 
   const handleDrop = async (ticketId, newStatus, targetId, side) => {
@@ -5835,11 +6191,17 @@ const KanbanPage = () => {
 
   const handleBulkApply = async patch => {
     const ids = Array.from(selectedIds);
-    const updated = await api.tickets.bulkUpdate(ids, patch);
-    const byId = Object.fromEntries(updated.map(t => [t.id, t]));
-    setTickets(prev => prev.map(t => byId[t.id] || t));
-    toast.success(`Updated ${ids.length} ticket${ids.length === 1 ? "" : "s"}`);
-    setSelectedIds(new Set());
+    try {
+      const { updated, skipped } = await api.tickets.bulkUpdate(ids, patch);
+      const byId = Object.fromEntries(updated.map(t => [t.id, t]));
+      setTickets(prev => prev.map(t => byId[t.id] || t));
+      if (skipped.length === 0) {
+        toast.success(`Updated ${updated.length} ticket${updated.length === 1 ? "" : "s"}`);
+      } else {
+        toast.warning(`Updated ${updated.length} of ${ids.length} — ${skipped.length} skipped: ${skipped[0].reason}${skipped.length > 1 ? ` (+${skipped.length - 1} more)` : ""}`);
+      }
+      setSelectedIds(new Set());
+    } catch (e) { toast.error(e.message); }
   };
 
   // Cascade an Epic's assignee/team down to its children — always explicit and
@@ -5847,10 +6209,12 @@ const KanbanPage = () => {
   const handleApplyToChildren = async (epic, epicChildren) => {
     const ids = epicChildren.map(c => c.id);
     if (ids.length === 0) return;
-    const updated = await api.tickets.bulkUpdate(ids, { assigneeId: epic.assigneeId || null, teamId: epic.teamId || null });
-    const byId = Object.fromEntries(updated.map(t => [t.id, t]));
-    setTickets(prev => prev.map(t => byId[t.id] || t));
-    toast.success(`Applied to ${ids.length} child ticket${ids.length === 1 ? "" : "s"}`);
+    try {
+      const { updated, skipped } = await api.tickets.bulkUpdate(ids, { assigneeId: epic.assigneeId || null, teamId: epic.teamId || null });
+      const byId = Object.fromEntries(updated.map(t => [t.id, t]));
+      setTickets(prev => prev.map(t => byId[t.id] || t));
+      toast.success(`Applied to ${updated.length} child ticket${updated.length === 1 ? "" : "s"}${skipped.length ? ` (${skipped.length} skipped)` : ""}`);
+    } catch (e) { toast.error(e.message); }
   };
 
   const handleTestOutcome = async ({ newStatus, testNotes }) => {
@@ -5871,15 +6235,22 @@ const KanbanPage = () => {
       testNotes:  form.testNotes  || null,
       versionId:  form.versionId  || null,
       sprintId:   form.sprintId   || null,
+      initiativeId: form.initiativeId || null,
       projectId:  currentProject?.id || null,
     };
-    if (modal === "add" || modal === "add-backlog") {
-      await api.tickets.create(payload);
-    } else {
-      await api.tickets.update(modal.id, { ...modal, ...payload });
+    try {
+      if (modal === "add" || modal === "add-backlog") {
+        await api.tickets.create(payload);
+      } else {
+        await api.tickets.update(modal.id, { ...modal, ...payload });
+      }
+      setModal(null);
+      load();
+    } catch (e) {
+      // Leave the modal open on rejection (e.g. a workflow requirement isn't met
+      // yet) so the fields that need fixing are still right there to edit.
+      toast.error(e.message);
     }
-    setModal(null);
-    load();
   };
 
   const handleTestItemSave = async form => {
@@ -5943,6 +6314,13 @@ const KanbanPage = () => {
               onChange={e => { const p = projects.find(x => x.id === e.target.value); if (p) switchProject(p); }}
               style={{ ...inputBase, fontFamily: T.body, fontSize: 12, cursor: "pointer", width: 160 }}>
               {projects.map(p => <option key={p.id} value={p.id}>{p.key} · {p.name}</option>)}
+            </select>
+          )}
+          {boards.length > 1 && (
+            <select value={currentBoard?.id || ""} title="Board — a filtered view of this project's statuses"
+              onChange={e => { const b = boards.find(x => x.id === e.target.value); if (b) switchBoard(b); }}
+              style={{ ...inputBase, fontFamily: T.body, fontSize: 12, cursor: "pointer", width: 150 }}>
+              {boards.map(b => <option key={b.id} value={b.id}>🗂 {b.name}</option>)}
             </select>
           )}
           {/* View tabs */}
@@ -6049,10 +6427,11 @@ const KanbanPage = () => {
               title="Board settings — columns, versions, sprints, baselines"
               style={{ fontFamily: T.body, fontSize: 12, padding: "5px 11px", borderRadius: 7,
                 background: "none", border: `1px solid ${T.border}`, color: T.textMuted,
-                cursor: "pointer", transition: "color .12s, border-color .12s" }}
+                cursor: "pointer", display: "flex", alignItems: "center", gap: 5,
+                transition: "color .12s, border-color .12s" }}
               onMouseEnter={e => { e.currentTarget.style.color = T.text; e.currentTarget.style.borderColor = T.text; }}
               onMouseLeave={e => { e.currentTarget.style.color = T.textMuted; e.currentTarget.style.borderColor = T.border; }}>
-              ⚙ Board
+              <IconSettings size={13} /> Board
             </button>
           )}
           {canEdit && (
@@ -6085,6 +6464,7 @@ const KanbanPage = () => {
             activeSprintId={activeSprintId}
             setActiveSprintId={setActiveSprintId}
             tickets={tickets}
+            teams={teams}
             onPreview={t => setPreviewId(t.id)}
           />
         </div>
@@ -6225,6 +6605,9 @@ const KanbanPage = () => {
             columns={colNames}
             versions={versions}
             sprints={sprints}
+            initiatives={initiatives}
+            onInitiativeCreated={loadInitiatives}
+            currentProjectId={currentProject?.id}
             onSave={handleSave}
             onCancel={() => setModal(null)}
             onLabelsChanged={load}

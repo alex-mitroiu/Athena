@@ -5,8 +5,11 @@ import { useAuth } from "../AuthContext";
 import { toast } from "../toast";
 import Spinner from "../components/primitives/Spinner";
 import TestCaseStoryLinksPanel from "../components/shared/TestCaseStoryLinksPanel";
+import TestStepsPanel from "../components/shared/TestStepsPanel";
 import { downloadCSV } from "../csv";
 import { ConfirmModal } from "../components/primitives/Modal";
+import { Textarea } from "../components/primitives/Form";
+import { MarkdownView } from "../markdown";
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
@@ -377,7 +380,6 @@ export default function TestCasesPage() {
 
     const [title,    setTitle]    = useState(editTicket?.title    ?? "");
     const [priority, setPriority] = useState(editTicket?.priority ?? "Medium");
-    const [notes,    setNotes]    = useState(editTicket?.testNotes    ?? "");
     const [desc,     setDesc]     = useState(editTicket?.description  ?? "");
     const [parentId, setParentId] = useState(editTicket?.parentId ?? initParent ?? "");
 
@@ -396,7 +398,7 @@ export default function TestCasesPage() {
         type: isFolder ? "Test Folder" : "Test Case",
         title: title.trim(),
         parentId: parentId || null,
-        ...(isFolder ? {} : { priority, testNotes: notes.trim() || null, description: desc.trim() || null }),
+        ...(isFolder ? {} : { priority, description: desc.trim() || null }),
       }, editTicket?.id ?? null);
     };
 
@@ -441,18 +443,13 @@ export default function TestCasesPage() {
                     {["Critical", "High", "Medium", "Low"].map(p => <option key={p}>{p}</option>)}
                   </select>
                 </div>
-                <div>
-                  {lbl("Description")}
-                  <textarea value={desc} onChange={e => setDesc(e.target.value)}
-                    placeholder="What is this test case verifying?"
-                    rows={2} style={{ ...inp, resize: "vertical" }} />
-                </div>
-                <div>
-                  {lbl("Test Steps")}
-                  <textarea value={notes} onChange={e => setNotes(e.target.value)}
-                    placeholder={"1. Navigate to…\n2. Click…\n3. Verify…"}
-                    rows={4} style={{ ...inp, resize: "vertical", fontFamily: T.mono, fontSize: 12 }} />
-                </div>
+                <Textarea label="Description" value={desc} onChange={setDesc}
+                  placeholder="What is this test case verifying?" rows={2} />
+                {!isEdit && (
+                  <div style={{ fontFamily: T.body, fontSize: 11.5, color: T.textMuted, fontStyle: "italic" }}>
+                    Steps are added on the test case's detail panel once it's created.
+                  </div>
+                )}
               </>
             )}
 
@@ -783,27 +780,26 @@ export default function TestCasesPage() {
                   <div style={{ fontFamily: T.body, fontSize: 10, fontWeight: 700,
                     textTransform: "uppercase", letterSpacing: ".07em",
                     color: T.textMuted, marginBottom: 6 }}>Description</div>
-                  <div style={{ fontFamily: T.body, fontSize: 13, color: T.text,
-                    lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{selected.description}</div>
+                  <MarkdownView text={selected.description} />
                 </div>
               )}
 
-              {/* Test Notes / Steps */}
-              {selected.testNotes ? (
+              {/* Legacy free-text notes — predates structured Steps below; kept visible, no longer editable here */}
+              {selected.testNotes && (
                 <div style={{ marginBottom: 16 }}>
                   <div style={{ fontFamily: T.body, fontSize: 10, fontWeight: 700,
                     textTransform: "uppercase", letterSpacing: ".07em",
-                    color: T.textMuted, marginBottom: 6 }}>Test Steps</div>
-                  <div style={{ fontFamily: T.body, fontSize: 13, color: T.text,
-                    lineHeight: 1.7, whiteSpace: "pre-wrap",
-                    background: T.bg, border: `1px solid ${T.border}`,
-                    borderRadius: 7, padding: "10px 14px" }}>{selected.testNotes}</div>
+                    color: T.textMuted, marginBottom: 6 }}>Legacy Notes (unstructured)</div>
+                  <div style={{ background: T.bg, border: `1px solid ${T.border}`, borderRadius: 7, padding: "10px 14px" }}>
+                    <MarkdownView text={selected.testNotes} style={{ lineHeight: 1.7 }} />
+                  </div>
                 </div>
-              ) : (
-                !selected.description && (
+              )}
+              {(
+                !selected.description && !selected.testNotes && (
                   <div style={{ fontFamily: T.body, fontSize: 13, color: T.textMuted,
                     fontStyle: "italic", marginBottom: 16 }}>
-                    No description or test steps added yet.
+                    No description added yet.
                   </div>
                 )
               )}
@@ -826,6 +822,10 @@ export default function TestCasesPage() {
                     <span style={{ fontFamily: T.mono, fontSize: 12, color: T.text }}>{selected.dueDate}</span>
                   </div>
                 )}
+              </div>
+
+              <div style={{ borderTop: `1px solid ${T.border}`, marginTop: 16, paddingTop: 16 }}>
+                <TestStepsPanel caseId={selected.id} />
               </div>
 
               <div style={{ borderTop: `1px solid ${T.border}`, marginTop: 16, paddingTop: 16 }}>

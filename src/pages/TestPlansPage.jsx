@@ -5,6 +5,7 @@ import { useAuth } from "../AuthContext";
 import { toast } from "../toast";
 import Spinner from "../components/primitives/Spinner";
 import { downloadCSV } from "../csv";
+import { Textarea } from "../components/primitives/Form";
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
@@ -146,6 +147,8 @@ export default function TestPlansPage() {
   const [dragCase,    setDragCase]    = useState(null);
   const [dropRunId,   setDropRunId]   = useState(null);
   const [highlightId, setHighlightId] = useState(null);
+  const [modal,       setModal]       = useState(null); // { kind: "folder"|"plan", parentId?, editTicket? }
+  const [saving,      setSaving]      = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -237,6 +240,23 @@ export default function TestPlansPage() {
     } catch { toast.error("Failed to move"); }
   };
 
+  const saveTicket = async (form, editId) => {
+    setSaving(true);
+    try {
+      if (editId) {
+        const existing = tickets.find(t => t.id === editId);
+        const updated  = await api.testItems.update(editId, { ...existing, ...form });
+        setTickets(p => p.map(t => t.id === editId ? updated : t));
+      } else {
+        const created = await api.testItems.create({ status: "Ready", ...form });
+        setTickets(p => [...p, created]);
+        if (form.type === "Test Plan") setNavSel({ type: "plan", id: created.id });
+      }
+      setModal(null);
+    } catch { toast.error(editId ? "Failed to save" : "Failed to create"); }
+    finally { setSaving(false); }
+  };
+
   // ── Right-panel sub-components ─────────────────────────────────────────────
 
   const ExecBtn = ({ label, title, color, onClick, active }) => {
@@ -252,6 +272,91 @@ export default function TestPlansPage() {
           alignItems: "center", justifyContent: "center", fontFamily: T.mono }}>
         {label}
       </button>
+    );
+  };
+
+  // ── Create / Edit modal (Test Plan / Test Folder) ──────────────────────────
+
+  const TestPlanFormModal = () => {
+    const { kind, parentId: initParent, editTicket } = modal;
+    const isEdit   = !!editTicket;
+    const isFolder = kind === "folder";
+
+    const [title,    setTitle]    = useState(editTicket?.title       ?? "");
+    const [desc,     setDesc]     = useState(editTicket?.description ?? "");
+    const [parentId, setParentId] = useState(editTicket?.parentId ?? initParent ?? "");
+
+    const inp = { fontFamily: T.body, fontSize: 13, color: T.text, background: T.bg,
+      border: `1px solid ${T.border}`, borderRadius: 7, padding: "7px 10px",
+      outline: "none", width: "100%", boxSizing: "border-box" };
+    const lbl = txt => (
+      <div style={{ fontFamily: T.body, fontSize: 10, fontWeight: 700, color: T.textMuted,
+        textTransform: "uppercase", letterSpacing: ".07em", marginBottom: 4 }}>{txt}</div>
+    );
+
+    const handleSubmit = e => {
+      e.preventDefault();
+      if (!title.trim()) return;
+      saveTicket({
+        type: isFolder ? "Test Folder" : "Test Plan",
+        title: title.trim(),
+        parentId: parentId || null,
+        ...(isFolder ? {} : { description: desc.trim() || null }),
+      }, editTicket?.id ?? null);
+    };
+
+    const heading = isEdit
+      ? (isFolder ? "Edit Folder" : "Edit Test Plan")
+      : (isFolder ? "New Test Folder" : "New Test Plan");
+
+    return (
+      <div style={{ position: "fixed", inset: 0, background: "#00000055", zIndex: 1000,
+        display: "flex", alignItems: "center", justifyContent: "center" }}
+        onClick={e => { if (e.target === e.currentTarget) setModal(null); }}>
+        <div style={{ background: T.surface, border: `1px solid ${T.border}`,
+          borderRadius: 12, padding: "24px 24px 20px", width: 480,
+          boxShadow: "0 8px 32px #0006", fontFamily: T.body }}>
+
+          <div style={{ fontSize: 15, fontWeight: 700, color: T.text, marginBottom: 18 }}>{heading}</div>
+
+          <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              {lbl("Title")}
+              <input autoFocus value={title} onChange={e => setTitle(e.target.value)}
+                placeholder={isFolder ? "Folder name…" : "Test plan title…"}
+                style={inp} />
+            </div>
+
+            <div>
+              {lbl("Parent folder")}
+              <select value={parentId} onChange={e => setParentId(e.target.value)} style={{ ...inp, cursor: "pointer" }}>
+                <option value="">None (root)</option>
+                {testFolders.map(f => <option key={f.id} value={f.id}>📁 {f.title}</option>)}
+              </select>
+            </div>
+
+            {!isFolder && (
+              <Textarea label="Description" value={desc} onChange={setDesc}
+                placeholder="What does this test plan cover?" rows={3} />
+            )}
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 4 }}>
+              <button type="button" onClick={() => setModal(null)}
+                style={{ fontFamily: T.body, fontSize: 13, color: T.textMuted, background: "none",
+                  border: `1px solid ${T.border}`, borderRadius: 7, padding: "7px 16px", cursor: "pointer" }}>
+                Cancel
+              </button>
+              <button type="submit" disabled={saving || !title.trim()}
+                style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: "#fff",
+                  background: title.trim() ? T.accent : T.border, border: "none",
+                  borderRadius: 7, padding: "7px 18px", cursor: title.trim() ? "pointer" : "default",
+                  transition: "background .15s" }}>
+                {saving ? "Saving…" : isEdit ? "Save Changes" : isFolder ? "Create Folder" : "Create Test Plan"}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     );
   };
 
@@ -338,6 +443,12 @@ export default function TestPlansPage() {
           <span style={{ fontSize: 10, color: T.textMuted, flexShrink: 0 }}>{isOpen ? "▾" : "▸"}</span>
           <span style={{ fontSize: 14, flexShrink: 0 }}>🧪</span>
           <span style={{ fontFamily: T.body, fontSize: 13, fontWeight: 700, color: T.text, flex: 1 }}>{plan.title}</span>
+          {canEdit && (
+            <button onClick={e => { e.stopPropagation(); setModal({ kind: "plan", editTicket: plan }); }}
+              style={{ background: "none", border: `1px solid ${T.border}`, borderRadius: 4,
+                color: T.textMuted, cursor: "pointer", fontSize: 11, padding: "2px 8px",
+                fontFamily: T.body, flexShrink: 0 }}>✎</button>
+          )}
           {stats.total > 0 && (
             <>
               <SegBar stats={stats} width={80} />
@@ -584,6 +695,24 @@ export default function TestPlansPage() {
               flexShrink: 0 }}>
             ⬇ Export
           </button>
+          {canEdit && (
+            <>
+              <button type="button"
+                onClick={() => setModal({ kind: "folder", parentId: navSel.type === "folder" ? navSel.id : null })}
+                style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, background: "transparent",
+                  border: `1px solid ${T.border}`, borderRadius: 7, padding: "6px 11px", cursor: "pointer",
+                  flexShrink: 0 }}>
+                📁 New Folder
+              </button>
+              <button type="button"
+                onClick={() => setModal({ kind: "plan", parentId: navSel.type === "folder" ? navSel.id : null })}
+                style={{ fontFamily: T.body, fontSize: 12, fontWeight: 600, color: "#fff",
+                  background: T.accent, border: "none", borderRadius: 7, padding: "6px 12px", cursor: "pointer",
+                  flexShrink: 0 }}>
+                + New Test Plan
+              </button>
+            </>
+          )}
         </div>
 
         {/* Plan tree / Coverage dashboard */}
@@ -602,6 +731,8 @@ export default function TestPlansPage() {
           )}
         </div>
       </div>
+
+      {modal && <TestPlanFormModal />}
     </div>
   );
 }
