@@ -286,6 +286,8 @@ db.exec(`
     created_at TEXT NOT NULL,
     UNIQUE(project_id, user_id)
   );
+
+  CREATE INDEX IF NOT EXISTS idx_tsh_ticket_changed ON ticket_status_history(ticket_id, changed_at);
 `);
 
 // Azure AD SSO — seeded once via INSERT OR IGNORE so a saved value is never clobbered.
@@ -319,6 +321,8 @@ try { db.exec("ALTER TABLE tickets ADD COLUMN sprint_id TEXT DEFAULT NULL"); } c
 try { db.exec("ALTER TABLE tickets ADD COLUMN approval_status TEXT DEFAULT NULL"); } catch {}
 try { db.exec("ALTER TABLE tickets ADD COLUMN approved_by TEXT DEFAULT ''"); } catch {}
 try { db.exec("ALTER TABLE tickets ADD COLUMN approved_at TEXT DEFAULT NULL"); } catch {}
+// Project Lead — a designation only, grants no capabilities beyond the existing role system.
+try { db.exec("ALTER TABLE kb_projects ADD COLUMN lead_user_id TEXT DEFAULT NULL"); } catch {}
 
 // Project access control (MVP) — backfill every existing user into every existing
 // project so this ships as a visibility narrowing for NEW projects going forward,
@@ -539,7 +543,7 @@ const mapStatusHistory = r => ({ id: r.id, ticketId: r.ticket_id, fromStatus: r.
 const mapWatcher = r => ({ id: r.id, ticketId: r.ticket_id, userId: r.user_id, userName: r.user_name || null, createdAt: r.created_at });
 const mapProjectMember = r => ({ id: r.id, projectId: r.project_id, userId: r.user_id, userName: r.user_name || null, userEmail: r.user_email || null, createdAt: r.created_at });
 
-const mapKbProject  = r => ({ id: r.id, name: r.name, key: r.key, color: r.color || "#6366f1", description: r.description || "", createdAt: r.created_at });
+const mapKbProject  = r => ({ id: r.id, name: r.name, key: r.key, color: r.color || "#6366f1", description: r.description || "", createdAt: r.created_at, leadUserId: r.lead_user_id || null, leadUserName: r.lead_user_name || null });
 const mapKbVersion  = r => ({ id: r.id, projectId: r.project_id, name: r.name, description: r.description || "", status: r.status || "Planning", releaseDate: r.release_date || null, createdAt: r.created_at });
 const mapKbColumn   = r => ({ id: r.id, projectId: r.project_id, name: r.name, position: r.position ?? 0, color: r.color || "#6366f1", wipLimit: r.wip_limit ?? null, createdAt: r.created_at });
 

@@ -266,6 +266,7 @@ export default function ReleasesPage() {
 
   const done  = verTickets.filter(t => DONE_STATUSES.has(t.status)).length;
   const total = verTickets.length;
+  const todayStr = new Date().toISOString().slice(0, 10);
 
   const verColor = v => VER_COLOR[v.status] || T.textMuted;
 
@@ -419,6 +420,14 @@ export default function ReleasesPage() {
                       {selVer.releaseDate && (
                         <span style={{ fontFamily: T.mono, fontSize: 11, color: T.textMuted }}>
                           📅 {selVer.releaseDate}
+                        </span>
+                      )}
+                      {selVer.releaseDate && selVer.releaseDate < todayStr && total > 0 && done < total && (
+                        <span title="Release date has passed and this version isn't fully done yet"
+                          style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 700,
+                            padding: "3px 9px", borderRadius: 5, color: T.danger,
+                            background: T.danger + "18", border: `1px solid ${T.danger}44` }}>
+                          ⚠ Overdue
                         </span>
                       )}
                     </div>

@@ -3563,8 +3563,7 @@ const BmEditForm = ({ onSave, onCancel, saving, children }) => (
 // ─── Board Manager Modal ──────────────────────────────────────────────────────
 // Tabbed manager for Projects, Columns, and Versions.
 
-const BoardManagerModal = ({ projects, currentProject, columns, versions, sprints, tickets, onClose, onRefresh, onProjectChange }) => {
-  const { isAdmin } = useAuth();
+const BoardManagerModal = ({ currentProject, columns, versions, sprints, tickets, onClose, onRefresh }) => {
   const [tab,        setTab]        = useState("columns");
   const [editItem,   setEditItem]   = useState(null);   // item being edited or "new"
   const [form,       setForm]       = useState({});
@@ -3573,7 +3572,6 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
   const [dragOver,   setDragOver]   = useState(null);
   const [baselines,  setBaselines]  = useState([]);
   const [viewBaseline, setViewBaseline] = useState(null);
-  const [membersProjectId, setMembersProjectId] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null); // { kind, id, message }
 
   useEffect(() => {
@@ -3592,20 +3590,6 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
   const VERSION_STATUSES = ["Planning", "In Development", "Released", "Archived"];
 
   // ── Save handlers ──────────────────────────────────────────────────────────
-  const saveProject = async () => {
-    if (!form.name?.trim()) return;
-    setSaving(true);
-    try {
-      if (editItem === "new") await api.kbProjects.create({ name: form.name, key: form.key || "", color: form.color || "#6366f1", description: form.description || "" });
-      else await api.kbProjects.update(editItem.id, { name: form.name, key: form.key || editItem.key, color: form.color || editItem.color, description: form.description || "" });
-      cancelEdit(); onRefresh();
-    } catch (e) { toast.error(e.message); }
-    finally { setSaving(false); }
-  };
-
-  const deleteProject = id => setPendingDelete({ kind: "project", id,
-    message: "Delete this project? Tickets in it will keep their project_id but the project will be gone." });
-
   const saveColumn = async () => {
     if (!form.name?.trim() || !currentProject) return;
     setSaving(true);
@@ -3670,8 +3654,7 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
     const { kind, id } = pendingDelete;
     setPendingDelete(null);
     try {
-      if (kind === "project")       { await api.kbProjects.remove(id); onRefresh(); }
-      else if (kind === "column")   { await api.kbColumns.remove(id); onRefresh(); }
+      if (kind === "column")        { await api.kbColumns.remove(id); onRefresh(); }
       else if (kind === "version")  { await api.kbVersions.remove(id); onRefresh(); }
       else if (kind === "sprint")   { await api.sprints.remove(id); onRefresh(); }
       else if (kind === "baseline") { await api.baselines.remove(id); setBaselines(prev => prev.filter(b => b.id !== id)); }
@@ -3720,7 +3703,7 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
 
         {/* Tabs */}
         <div style={{ display: "flex", borderBottom: `1px solid ${T.border}`, flexShrink: 0 }}>
-          {[["columns","⬛ Columns"], ["projects","📁 Projects"], ["versions","🏷 Versions"], ["sprints","🏃 Sprints"], ["baselines","📸 Baselines"]].map(([id, label]) => (
+          {[["columns","⬛ Columns"], ["versions","🏷 Versions"], ["sprints","🏃 Sprints"], ["baselines","📸 Baselines"]].map(([id, label]) => (
             <button key={id} type="button" onClick={() => { cancelEdit(); setTab(id); }} style={TAB_BTN(tab === id)}>{label}</button>
           ))}
         </div>
@@ -3782,79 +3765,6 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
                     border: `1px dashed ${T.accent}55`, borderRadius: 7, padding: "7px 16px",
                     cursor: "pointer", width: "100%", textAlign: "left", marginTop: 8 }}>
                   ＋ Add Column
-                </button>
-              )}
-            </div>
-          )}
-
-          {/* ── Projects tab ── */}
-          {tab === "projects" && (
-            <div>
-              {projects.map(prj => (
-                editItem?.id === prj.id ? (
-                  <BmEditForm onCancel={cancelEdit} key={prj.id} onSave={saveProject} saving={saving}>
-                    <BmFormRow label="Name"><input value={form.name || ""} onChange={e => sf("name")(e.target.value)} style={inp} autoFocus /></BmFormRow>
-                    <BmFormRow label="Key (short code)"><input value={form.key || ""} onChange={e => sf("key")(e.target.value.toUpperCase().slice(0,6))} style={inp} placeholder="e.g. MAIN" maxLength={6} /></BmFormRow>
-                    <BmFormRow label="Color">
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <input type="color" value={form.color || "#6366f1"} onChange={e => sf("color")(e.target.value)}
-                          style={{ width: 36, height: 30, borderRadius: 5, border: `1px solid ${T.border}`, padding: 2, cursor: "pointer", background: "none" }} />
-                        <span style={{ fontFamily: T.mono, fontSize: 12, color: T.textMuted }}>{form.color || "#6366f1"}</span>
-                      </div>
-                    </BmFormRow>
-                    <BmFormRow label="Description"><input value={form.description || ""} onChange={e => sf("description")(e.target.value)} style={inp} placeholder="Optional" /></BmFormRow>
-                  </BmEditForm>
-                ) : (
-                  <div key={prj.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
-                    borderRadius: 7, marginBottom: 5, background: currentProject?.id === prj.id ? `${T.accent}10` : T.bg,
-                    border: `1px solid ${currentProject?.id === prj.id ? T.accent + "44" : T.border}` }}>
-                    {swatch(prj.color || "#6366f1")}
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontFamily: T.body, fontSize: 13, fontWeight: 600, color: T.text }}>{prj.name}</div>
-                      <div style={{ fontFamily: T.mono, fontSize: 10, color: T.textMuted }}>{prj.key}</div>
-                    </div>
-                    {currentProject?.id !== prj.id && (
-                      <button type="button" onClick={() => { onProjectChange(prj); onClose(); }}
-                        style={{ fontFamily: T.body, fontSize: 11, padding: "3px 10px", borderRadius: 5,
-                          background: T.accent + "15", border: `1px solid ${T.accent}44`, color: T.accent, cursor: "pointer" }}>
-                        Switch
-                      </button>
-                    )}
-                    {currentProject?.id === prj.id && (
-                      <span style={{ fontFamily: T.mono, fontSize: 10, color: T.accent, padding: "2px 8px",
-                        background: T.accent + "15", border: `1px solid ${T.accent}44`, borderRadius: 4 }}>Active</span>
-                    )}
-                    {isAdmin && (
-                      <button type="button" onClick={() => setMembersProjectId(prj.id)} title="Manage project access"
-                        style={{ fontFamily: T.body, fontSize: 11, padding: "3px 9px", borderRadius: 5,
-                          background: "none", border: `1px solid ${T.border}`, color: T.textMuted, cursor: "pointer" }}>
-                        👥 Members
-                      </button>
-                    )}
-                    <button type="button" onClick={() => startEdit(prj)} style={{ background: "none", border: "none",
-                      cursor: "pointer", color: T.textMuted, fontSize: 14, padding: "2px 4px" }}>✎</button>
-                    <button type="button" onClick={() => deleteProject(prj.id)} style={{ background: "none", border: "none",
-                      cursor: "pointer", color: T.danger, fontSize: 14, padding: "2px 4px" }}>✕</button>
-                  </div>
-                )
-              ))}
-              {editItem === "new" && tab === "projects" ? (
-                <BmEditForm onCancel={cancelEdit} onSave={saveProject} saving={saving}>
-                  <BmFormRow label="Project Name"><input value={form.name || ""} onChange={e => sf("name")(e.target.value)} style={inp} autoFocus placeholder="e.g. CargoDesk Platform" /></BmFormRow>
-                  <BmFormRow label="Key"><input value={form.key || ""} onChange={e => sf("key")(e.target.value.toUpperCase().slice(0,6))} style={inp} placeholder="CDP" maxLength={6} /></BmFormRow>
-                  <BmFormRow label="Color">
-                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                      <input type="color" value={form.color || "#6366f1"} onChange={e => sf("color")(e.target.value)}
-                        style={{ width: 36, height: 30, borderRadius: 5, border: `1px solid ${T.border}`, padding: 2, cursor: "pointer", background: "none" }} />
-                    </div>
-                  </BmFormRow>
-                </BmEditForm>
-              ) : (
-                <button type="button" onClick={() => startNew({ color: "#6366f1" })}
-                  style={{ fontFamily: T.body, fontSize: 13, color: T.accent, background: "none",
-                    border: `1px dashed ${T.accent}55`, borderRadius: 7, padding: "7px 16px",
-                    cursor: "pointer", width: "100%", textAlign: "left", marginTop: 8 }}>
-                  ＋ New Project
                 </button>
               )}
             </div>
@@ -4030,77 +3940,10 @@ const BoardManagerModal = ({ projects, currentProject, columns, versions, sprint
       {viewBaseline && (
         <BaselineViewModal baselineId={viewBaseline} liveTickets={tickets} onClose={() => setViewBaseline(null)} />
       )}
-      {membersProjectId && (
-        <ProjectMembersModal projectId={membersProjectId}
-          projectName={projects.find(p => p.id === membersProjectId)?.name || ""}
-          onClose={() => setMembersProjectId(null)} />
-      )}
       {pendingDelete && (
         <ConfirmModal message={pendingDelete.message} onConfirm={confirmPendingDelete} onCancel={() => setPendingDelete(null)} />
       )}
     </div>
-  );
-};
-
-// ─── Project Members (access control MVP) ──────────────────────────────────────
-// Binary membership only — capabilities within a project still come from a
-// user's existing global role. This only decides which projects they can see.
-
-const ProjectMembersModal = ({ projectId, projectName, onClose }) => {
-  const [allUsers, setAllUsers] = useState([]);
-  const [members,  setMembers]  = useState(null); // null = loading
-  const [busyId,   setBusyId]   = useState(null);
-
-  const load = () => api.kbProjects.members(projectId).then(setMembers).catch(() => setMembers([]));
-  useEffect(() => {
-    api.users.list().then(setAllUsers).catch(() => {});
-    load();
-  }, [projectId]);
-
-  const memberIds = new Set((members || []).map(m => m.userId));
-
-  const toggle = async user => {
-    setBusyId(user.id);
-    try {
-      if (memberIds.has(user.id)) await api.kbProjects.removeMember(projectId, user.id);
-      else await api.kbProjects.addMember(projectId, user.id);
-      await load();
-    } catch (e) { toast.error(e.message); }
-    finally { setBusyId(null); }
-  };
-
-  return (
-    <Modal title={`👥 Members — ${projectName}`} onClose={onClose} width={440}>
-      <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
-        Only members can see this project at all. A member's actual permissions within it
-        still come from their admin/operator/viewer role — this just controls visibility.
-      </div>
-      {members === null ? (
-        <div style={{ padding: "20px 0", textAlign: "center", fontFamily: T.body, fontSize: 12, color: T.textMuted }}>Loading…</div>
-      ) : (
-        <div style={{ maxHeight: 320, overflowY: "auto", border: `1px solid ${T.border}`, borderRadius: 8 }}>
-          {allUsers.map(u => {
-            const checked = memberIds.has(u.id);
-            return (
-              <label key={u.id} onClick={() => !busyId && toggle(u)} style={{
-                display: "flex", alignItems: "center", gap: 9, padding: "8px 12px",
-                cursor: busyId ? "default" : "pointer", borderBottom: `1px solid ${T.border}`,
-                background: checked ? T.accent + "10" : "transparent", opacity: busyId === u.id ? 0.5 : 1 }}>
-                <input type="checkbox" readOnly checked={checked} style={{ width: 14, height: 14, cursor: "pointer" }} />
-                <div style={{ width: 22, height: 22, borderRadius: "50%", flexShrink: 0,
-                  background: T.accent + "18", border: `1px solid ${T.accent}44`,
-                  display: "flex", alignItems: "center", justifyContent: "center",
-                  fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.accent }}>
-                  {u.name?.[0]?.toUpperCase() ?? "?"}
-                </div>
-                <span style={{ fontFamily: T.body, fontSize: 13, color: T.text }}>{u.name}</span>
-                <span style={{ fontFamily: T.mono, fontSize: 11, color: T.textMuted, marginLeft: "auto" }}>{u.email}</span>
-              </label>
-            );
-          })}
-        </div>
-      )}
-    </Modal>
   );
 };
 
@@ -4744,6 +4587,365 @@ const TestItemPreview = ({ item, testItems, tickets, onClose, onEdit, onDelete, 
           onConfirm={() => { setConfirm(false); onDelete(item.id); onClose(); }}
           onCancel={() => setConfirm(false)} />
       )}
+    </div>
+  );
+};
+
+// ─── Reports (TKT-4NYM2J, TKT-03PXD2, TKT-LN34TX, TKT-3K1DE4, TKT-SSSQBO) ────────
+// Read-only project reports living under one "📊 Reports" board tab rather than
+// five separate top-level tabs. Overview is pure client-side aggregation over
+// tickets already loaded by the board; the other four self-fetch their own
+// project-scoped report endpoint.
+
+const ReportStatTile = ({ label, value, color }) => (
+  <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
+    padding: "14px 16px", minWidth: 130 }}>
+    <div style={{ fontFamily: T.mono, fontSize: 22, fontWeight: 800, color: color || T.text }}>{value}</div>
+    <div style={{ fontFamily: T.body, fontSize: 11, color: T.textMuted, marginTop: 2 }}>{label}</div>
+  </div>
+);
+
+const ReportBreakdown = ({ title, counts, total }) => {
+  const entries = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  return (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
+      padding: 16, flex: 1, minWidth: 220 }}>
+      <div style={{ fontFamily: T.body, fontSize: 12, fontWeight: 700, color: T.text, marginBottom: 10 }}>{title}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {entries.length === 0 && (
+          <div style={{ fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>No data</div>
+        )}
+        {entries.map(([k, v]) => (
+          <div key={k}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontFamily: T.body,
+              fontSize: 11.5, color: T.textMuted, marginBottom: 3 }}>
+              <span>{k}</span><span>{v}</span>
+            </div>
+            <div style={{ height: 6, borderRadius: 3, background: T.bg, overflow: "hidden" }}>
+              <div style={{ height: "100%", width: `${total ? (v / total * 100) : 0}%`, background: T.accent, borderRadius: 3 }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const ReportOverview = ({ tickets }) => {
+  const total = tickets.length;
+  const done  = tickets.filter(t => DONE_STATUSES.has(t.status)).length;
+  const open  = total - done;
+  const byType = {}, byPriority = {}, byAssignee = {};
+  for (const t of tickets) {
+    const type = t.type || "Task";
+    byType[type] = (byType[type] || 0) + 1;
+    const pr = t.priority || "Medium";
+    byPriority[pr] = (byPriority[pr] || 0) + 1;
+    const a = t.assigneeName || "Unassigned";
+    byAssignee[a] = (byAssignee[a] || 0) + 1;
+  }
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <ReportStatTile label="Total tickets" value={total} />
+        <ReportStatTile label="Open" value={open} color={T.accent} />
+        <ReportStatTile label="Done" value={done} color="#22c55e" />
+      </div>
+      <div style={{ display: "flex", gap: 14, flexWrap: "wrap" }}>
+        <ReportBreakdown title="By Type" counts={byType} total={total} />
+        <ReportBreakdown title="By Priority" counts={byPriority} total={total} />
+        <ReportBreakdown title="By Assignee" counts={byAssignee} total={total} />
+      </div>
+    </div>
+  );
+};
+
+const ReportActivity = ({ projectId }) => {
+  const [items, setItems] = useState(null);
+
+  useEffect(() => {
+    setItems(null);
+    api.kbProjects.activity(projectId).then(r => setItems(r.items)).catch(() => setItems([]));
+  }, [projectId]);
+
+  const fmtWhen = d => new Date(d).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+  if (items === null) return <div style={{ padding: 40, textAlign: "center" }}><Spinner size="md" /></div>;
+  if (items.length === 0) return (
+    <div style={{ padding: "48px 0", textAlign: "center", fontFamily: T.body, fontSize: 13, color: T.textMuted, fontStyle: "italic" }}>
+      No activity recorded yet.
+    </div>
+  );
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 6, maxWidth: 680 }}>
+      {items.map(it => (
+        <div key={it.id} style={{ display: "flex", alignItems: "baseline", gap: 8, padding: "9px 12px",
+          borderRadius: 8, background: T.surface, border: `1px solid ${T.border}` }}>
+          <span style={{ fontFamily: T.body, fontSize: 12.5, color: T.text, flex: 1 }}>
+            <strong>{it.userName}</strong>{" "}
+            {it.kind === "status" ? (
+              it.fromStatus
+                ? <>moved <em>{it.ticketTitle}</em> from <strong>{it.fromStatus}</strong> to <strong style={{ color: T.accent }}>{it.toStatus}</strong></>
+                : <>created <em>{it.ticketTitle}</em> in <strong style={{ color: T.accent }}>{it.toStatus}</strong></>
+            ) : (
+              <>commented on <em>{it.ticketTitle}</em></>
+            )}
+          </span>
+          <span style={{ fontFamily: T.body, fontSize: 10.5, color: T.textMuted, whiteSpace: "nowrap" }}>
+            {fmtWhen(it.at)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const ReportCumulativeFlow = ({ projectId, columns }) => {
+  const [data, setData] = useState(null);
+  const [days, setDays] = useState(30);
+
+  useEffect(() => {
+    setData(null);
+    api.kbProjects.cumulativeFlow(projectId, days).catch(() => null).then(d =>
+      setData(d || { days: [], statuses: [], approximatedTicketCount: 0, totalTicketCount: 0 }));
+  }, [projectId, days]);
+
+  if (data === null) return <div style={{ padding: 40, textAlign: "center" }}><Spinner size="md" /></div>;
+
+  const colAccent = columns.length > 0 ? Object.fromEntries(columns.map(c => [c.name, c.color])) : COL_ACCENT;
+
+  const daysCtl = (
+    <select value={days} onChange={e => setDays(Number(e.target.value))}
+      style={{ fontFamily: T.body, fontSize: 12, padding: "4px 8px", borderRadius: 6,
+        border: `1px solid ${T.border}`, background: T.bg, color: T.text, cursor: "pointer" }}>
+      <option value={14}>14 days</option>
+      <option value={30}>30 days</option>
+      <option value={60}>60 days</option>
+      <option value={90}>90 days</option>
+    </select>
+  );
+
+  if (data.days.length === 0) return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", justifyContent: "flex-end" }}>{daysCtl}</div>
+      <div style={{ padding: "48px 0", textAlign: "center", fontFamily: T.body, fontSize: 13, color: T.textMuted, fontStyle: "italic" }}>
+        Not enough recorded status history yet to chart flow.
+      </div>
+    </div>
+  );
+
+  const W = 680, H = 260, PAD_L = 34, PAD_B = 22, PAD_T = 10, PAD_R = 10;
+  const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+  const n = data.days.length;
+  const maxTotal = Math.max(...data.days.map(d => Object.values(d.counts).reduce((a, b) => a + b, 0)), 1);
+  const xFor = i => PAD_L + (n > 1 ? (i / (n - 1)) * plotW : plotW / 2);
+  const yFor = v => PAD_T + plotH - (v / maxTotal) * plotH;
+
+  // Stack bottom-up in status order so the earliest workflow status forms the
+  // base band and the chart reads left-to-right, bottom-to-top like a normal CFD.
+  const stackedSeries = [];
+  let running = data.days.map(() => 0);
+  for (const status of data.statuses) {
+    const next = data.days.map((d, i) => running[i] + (d.counts[status] || 0));
+    stackedSeries.push({ status, bottom: [...running], top: [...next] });
+    running = next;
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ fontFamily: T.body, fontSize: 11.5, color: T.textMuted }}>
+          {data.approximatedTicketCount > 0 && (
+            <>⚠ {data.approximatedTicketCount} of {data.totalTicketCount} ticket(s) predate status-history tracking
+            — shown at their current status for every day rather than a real historical status.</>
+          )}
+        </div>
+        {daysCtl}
+      </div>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: "14px 10px" }}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+          <line x1={PAD_L} y1={PAD_T + plotH} x2={W - PAD_R} y2={PAD_T + plotH} stroke={T.border} strokeWidth="1" />
+          <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + plotH} stroke={T.border} strokeWidth="1" />
+          {stackedSeries.map(s => {
+            const topPath = data.days.map((_, i) => `${i === 0 ? "M" : "L"} ${xFor(i)} ${yFor(s.top[i])}`).join(" ");
+            const bottomPath = data.days.map((_, ri) => {
+              const i = n - 1 - ri;
+              return `L ${xFor(i)} ${yFor(s.bottom[i])}`;
+            }).join(" ");
+            return (
+              <path key={s.status} d={`${topPath} ${bottomPath} Z`}
+                fill={(colAccent[s.status] || T.accent) + "AA"} stroke={colAccent[s.status] || T.accent} strokeWidth="1" />
+            );
+          })}
+          <text x={PAD_L - 6} y={PAD_T + 4} textAnchor="end" fontSize="9" fill={T.textMuted} fontFamily="monospace">{maxTotal}</text>
+          <text x={PAD_L - 6} y={PAD_T + plotH} textAnchor="end" fontSize="9" fill={T.textMuted} fontFamily="monospace">0</text>
+        </svg>
+        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", justifyContent: "center", marginTop: 8 }}>
+          {data.statuses.map(s => (
+            <span key={s} style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: T.body, fontSize: 11, color: T.textMuted }}>
+              <span style={{ width: 10, height: 10, borderRadius: 2, background: colAccent[s] || T.accent }} /> {s}
+            </span>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const rtThStyle = { textAlign: "left", padding: "8px 14px", fontFamily: T.mono, fontSize: 10.5,
+  fontWeight: 700, color: T.textMuted, textTransform: "uppercase", letterSpacing: ".06em",
+  borderBottom: `1px solid ${T.border}` };
+const rtTdStyle = { padding: "8px 14px", fontFamily: T.body, fontSize: 12.5, color: T.text,
+  borderBottom: `1px solid ${T.border}` };
+
+const ReportCycleTime = ({ projectId }) => {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    setData(null);
+    api.kbProjects.cycleTime(projectId).then(setData).catch(() => setData(null));
+  }, [projectId]);
+
+  if (data === null) return <div style={{ padding: 40, textAlign: "center" }}><Spinner size="md" /></div>;
+
+  const fmtDuration = ms => {
+    if (ms == null) return "—";
+    const hours = ms / 3600000;
+    return hours < 24 ? `${hours.toFixed(1)}h` : `${(hours / 24).toFixed(1)}d`;
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 680 }}>
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+        <ReportStatTile label="Cycle time (avg)" value={fmtDuration(data.overallCycleTimeAvgMs)} />
+        <ReportStatTile label="Cycle time (median)" value={fmtDuration(data.overallCycleTimeMedianMs)} />
+        <ReportStatTile label="Tickets reaching Done" value={data.ticketsReachedDone} />
+      </div>
+      <div style={{ fontFamily: T.body, fontSize: 11.5, color: T.textMuted }}>
+        Based on {data.ticketsWithHistory} of {data.totalTickets} ticket(s) with recorded status history
+        {data.totalTickets > data.ticketsWithHistory ? " — older tickets created before history tracking began aren't counted." : "."}
+      </div>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, overflow: "hidden" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr>
+              <th style={rtThStyle}>Status</th>
+              <th style={rtThStyle}>Tickets</th>
+              <th style={rtThStyle}>Avg time</th>
+              <th style={rtThStyle}>Median time</th>
+            </tr>
+          </thead>
+          <tbody>
+            {data.byStatus.length === 0 ? (
+              <tr><td colSpan={4} style={{ padding: 20, textAlign: "center", fontFamily: T.body, fontSize: 12, color: T.textMuted, fontStyle: "italic" }}>No data yet.</td></tr>
+            ) : data.byStatus.map(s => (
+              <tr key={s.status}>
+                <td style={rtTdStyle}>{s.status}</td>
+                <td style={rtTdStyle}>{s.count}</td>
+                <td style={rtTdStyle}>{fmtDuration(s.avgMs)}</td>
+                <td style={rtTdStyle}>{fmtDuration(s.medianMs)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const ReportVelocity = ({ projectId }) => {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    setData(null);
+    api.kbProjects.velocity(projectId).then(setData).catch(() => setData({ sprints: [] }));
+  }, [projectId]);
+
+  if (data === null) return <div style={{ padding: 40, textAlign: "center" }}><Spinner size="md" /></div>;
+  if (data.sprints.length === 0) return (
+    <div style={{ padding: "48px 0", textAlign: "center", fontFamily: T.body, fontSize: 13, color: T.textMuted, fontStyle: "italic" }}>
+      No sprints yet — create one in Board Settings → Sprints.
+    </div>
+  );
+
+  const maxPoints = Math.max(...data.sprints.map(s => s.totalPoints), 1);
+  const W = 680, H = 220, PAD_L = 34, PAD_B = 40, PAD_T = 10, PAD_R = 10;
+  const plotW = W - PAD_L - PAD_R, plotH = H - PAD_T - PAD_B;
+  const n = data.sprints.length;
+  const gap = plotW / n;
+  const barW = Math.min(gap * 0.6, 60);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 12, maxWidth: 720 }}>
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10, padding: "14px 10px" }}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }}>
+          <line x1={PAD_L} y1={PAD_T + plotH} x2={W - PAD_R} y2={PAD_T + plotH} stroke={T.border} strokeWidth="1" />
+          <line x1={PAD_L} y1={PAD_T} x2={PAD_L} y2={PAD_T + plotH} stroke={T.border} strokeWidth="1" />
+          {data.sprints.map((s, i) => {
+            const x = PAD_L + i * gap + (gap - barW) / 2;
+            const totalH = (s.totalPoints / maxPoints) * plotH;
+            const doneH  = (s.completedPoints / maxPoints) * plotH;
+            const yBase  = PAD_T + plotH;
+            return (
+              <g key={s.sprintId}>
+                <rect x={x} y={yBase - totalH} width={barW} height={totalH} fill={T.border} rx="2" />
+                <rect x={x} y={yBase - doneH} width={barW} height={doneH} fill={T.accent} rx="2" />
+                <text x={x + barW / 2} y={yBase + 14} textAnchor="middle" fontSize="9" fill={T.textMuted} fontFamily="monospace">
+                  {s.sprintName.length > 10 ? s.sprintName.slice(0, 9) + "…" : s.sprintName}
+                </text>
+                <text x={x + barW / 2} y={yBase - totalH - 5} textAnchor="middle" fontSize="9" fill={T.textMuted} fontFamily="monospace">
+                  {s.completedPoints}/{s.totalPoints}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+        <div style={{ display: "flex", gap: 16, justifyContent: "center", marginTop: 4 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: T.body, fontSize: 11, color: T.textMuted }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: T.accent }} /> Completed points
+          </span>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 5, fontFamily: T.body, fontSize: 11, color: T.textMuted }}>
+            <span style={{ width: 10, height: 10, borderRadius: 2, background: T.border }} /> Total points
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const REPORT_TABS = [
+  ["overview",  "📊 Overview"],
+  ["activity",  "📰 Activity"],
+  ["cfd",       "📈 Cumulative Flow"],
+  ["cycletime", "⏱ Cycle Time"],
+  ["velocity",  "🏁 Velocity"],
+];
+
+const ReportsView = ({ project, tickets, columns }) => {
+  const [sub, setSub] = useState("overview");
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 14, height: "100%" }}>
+      <div style={{ display: "flex", borderRadius: 7, border: `1px solid ${T.border}`,
+        overflow: "hidden", flexShrink: 0, width: "fit-content" }}>
+        {REPORT_TABS.map(([key, label]) => (
+          <button key={key} onClick={() => setSub(key)}
+            style={{ padding: "6px 12px", border: "none", cursor: "pointer",
+              fontFamily: T.body, fontSize: 12, fontWeight: sub === key ? 700 : 400,
+              background: sub === key ? T.accent + "22" : "transparent",
+              color: sub === key ? T.accent : T.textMuted, whiteSpace: "nowrap" }}>
+            {label}
+          </button>
+        ))}
+      </div>
+      <div style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+        {sub === "overview"  && <ReportOverview tickets={tickets} />}
+        {sub === "activity"  && <ReportActivity projectId={project.id} />}
+        {sub === "cfd"       && <ReportCumulativeFlow projectId={project.id} columns={columns} />}
+        {sub === "cycletime" && <ReportCycleTime projectId={project.id} />}
+        {sub === "velocity"  && <ReportVelocity projectId={project.id} />}
+      </div>
     </div>
   );
 };
@@ -5433,7 +5635,7 @@ const KanbanPage = () => {
   const [previewId,     setPreviewId]     = useState(null);
   const [showReleased,  setShowReleased]  = useState(true);
   const [backlogOpen,   setBacklogOpen]   = useState(false);
-  const [boardView,     setBoardView]     = useState("board"); // "board" | "roadmap" | "tests"
+  const [boardView,     setBoardView]     = useState("board"); // "board" | "roadmap" | "sprint" | "tests" | "reports"
   const [boardMgr,      setBoardMgr]      = useState(false);
   const [bulkMode,      setBulkMode]      = useState(false);
   const [selectedIds,   setSelectedIds]   = useState(() => new Set());
@@ -5751,6 +5953,7 @@ const KanbanPage = () => {
               <button type="button" onClick={() => setBoardView("sprint")} style={VIEW_BTN("sprint")}>🏃 Sprint</button>
             )}
             <button type="button" onClick={() => setBoardView("tests")}  style={VIEW_BTN("tests")}>🧪 Tests</button>
+            <button type="button" onClick={() => setBoardView("reports")} style={VIEW_BTN("reports")}>📊 Reports</button>
           </div>
         </div>
 
@@ -5843,7 +6046,7 @@ const KanbanPage = () => {
           )}
           {canEdit && (
             <button type="button" onClick={() => setBoardMgr(true)}
-              title="Board settings — projects, columns, versions"
+              title="Board settings — columns, versions, sprints, baselines"
               style={{ fontFamily: T.body, fontSize: 12, padding: "5px 11px", borderRadius: 7,
                 background: "none", border: `1px solid ${T.border}`, color: T.textMuted,
                 cursor: "pointer", transition: "color .12s, border-color .12s" }}
@@ -5885,6 +6088,8 @@ const KanbanPage = () => {
             onPreview={t => setPreviewId(t.id)}
           />
         </div>
+      ) : boardView === "reports" ? (
+        <ReportsView project={currentProject} tickets={tickets} columns={columns} />
       ) : boardView === "tests" ? (
         <div style={{ flex: 1, minHeight: 0, display: "flex", gap: 14 }}>
           <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
@@ -6046,7 +6251,6 @@ const KanbanPage = () => {
 
       {boardMgr && (
         <BoardManagerModal
-          projects={projects}
           currentProject={currentProject}
           columns={columns}
           versions={versions}
@@ -6054,7 +6258,6 @@ const KanbanPage = () => {
           tickets={tickets}
           onClose={() => setBoardMgr(false)}
           onRefresh={load}
-          onProjectChange={switchProject}
         />
       )}
 

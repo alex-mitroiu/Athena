@@ -1,8 +1,14 @@
-export const VERSION  = "0.7.0";
+export const VERSION  = "0.8.0";
 export const BUILD    = "2026-07-20";
 export const CODENAME = "Genesis";
 
 export const CHANGELOG = [
+  {
+    version:  "0.8.0",
+    date:     "2026-07-20",
+    codename: "Genesis",
+    summary:  "Project management & reporting wave: Projects moved off the Kanban board's Board Settings modal into their own dedicated admin-only Projects page (create/edit, description, Project Lead, and Members/access) — Columns/Versions/Sprints/Baselines stay in Board Settings since those are day-to-day working config, not admin setup. Project Lead is a designation only, no new permission logic. A new \"📊 Reports\" board tab (visible to every role, read-only) adds five project reports: Overview (stat tiles + type/priority/assignee breakdown), Activity (a unified feed of status changes and comments across the project), Cumulative Flow Diagram, Time-in-Status / Cycle Time (with a sample-size disclosure for tickets that predate status-history tracking), and Velocity (completed vs. total story points per sprint). A new Needs-Attention Dashboard widget surfaces unassigned, overdue, and stale (no recent activity) tickets across every accessible project. Releases gets an \"⚠ Overdue\" badge when a version's release date has passed without reaching 100% done. Component-based ticket routing (TKT-S5K2ZC) was deliberately deferred as a bigger, separate lift.",
+  },
   {
     version:  "0.7.0",
     date:     "2026-07-20",

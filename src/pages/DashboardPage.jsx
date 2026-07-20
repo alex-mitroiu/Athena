@@ -13,10 +13,11 @@ import Spinner from "../components/primitives/Spinner";
 const DONE_STATUSES = new Set(["Done", "Ready to Deploy", "Released"]);
 
 const WIDGET_CATALOG = [
-  { type: "my-tickets",    icon: "📋", label: "My Tickets" },
-  { type: "burndown",      icon: "🔥", label: "Sprint Burndown" },
-  { type: "notifications", icon: "🔔", label: "Recent Notifications" },
-  { type: "worklog",       icon: "⏱", label: "Work Log Summary" },
+  { type: "my-tickets",      icon: "📋", label: "My Tickets" },
+  { type: "burndown",        icon: "🔥", label: "Sprint Burndown" },
+  { type: "notifications",   icon: "🔔", label: "Recent Notifications" },
+  { type: "worklog",         icon: "⏱", label: "Work Log Summary" },
+  { type: "needs-attention", icon: "🚩", label: "Needs Attention" },
 ];
 
 const PRIORITY_DOT = { Critical: "#ef4444", High: "#f59e0b", Medium: "#6366f1", Low: "#6b7280" };
@@ -193,11 +194,82 @@ const WorkLogWidget = () => {
   );
 };
 
+// ─── Widget: Needs Attention (TKT-OD1EFW) ───────────────────────────────────────
+// Aggregates unassigned/overdue/stale-with-no-activity tickets across every
+// project the user can access, one needs-attention call per project (each
+// already computed server-side in a single pass — see routes/kanban.js).
+
+const ATTN_KIND_LABEL = { overdue: "⚠ Overdue", stale: "💤 Stale", unassigned: "❓ Unassigned" };
+const ATTN_KIND_COLOR = { overdue: "#ef4444", stale: "#f59e0b", unassigned: "#6b7280" };
+
+const NeedsAttentionWidget = () => {
+  const [state, setState] = useState({ loading: true });
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const projects = await api.kbProjects.list();
+        const perProject = await Promise.all(projects.map(async p => {
+          try { return { project: p, ...(await api.kbProjects.needsAttention(p.id)) }; }
+          catch { return null; }
+        }));
+        if (!cancelled) setState({ loading: false, perProject: perProject.filter(Boolean) });
+      } catch {
+        if (!cancelled) setState({ loading: false, perProject: [] });
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
+  if (state.loading) return <div style={{ display: "flex", justifyContent: "center", padding: 20 }}><Spinner size="sm" /></div>;
+
+  const items = [];
+  for (const p of state.perProject) {
+    for (const t of p.overdue)    items.push({ t, project: p.project, kind: "overdue" });
+    for (const t of p.stale)      items.push({ t, project: p.project, kind: "stale" });
+    for (const t of p.unassigned) items.push({ t, project: p.project, kind: "unassigned" });
+  }
+
+  if (items.length === 0) return <EmptyNote>Nothing needs attention right now.</EmptyNote>;
+
+  const totalOverdue    = state.perProject.reduce((s, p) => s + p.overdue.length, 0);
+  const totalStale      = state.perProject.reduce((s, p) => s + p.stale.length, 0);
+  const totalUnassigned = state.perProject.reduce((s, p) => s + p.unassigned.length, 0);
+
+  return (
+    <div>
+      <div style={{ display: "flex", gap: 10, marginBottom: 10, fontFamily: T.mono, fontSize: 10.5, color: T.textMuted }}>
+        <span>⚠ {totalOverdue} overdue</span>
+        <span>💤 {totalStale} stale</span>
+        <span>❓ {totalUnassigned} unassigned</span>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+        {items.slice(0, 8).map(({ t, project, kind }) => (
+          <div key={`${kind}-${t.id}`} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 8px",
+            borderRadius: 6, background: T.bg, borderLeft: `3px solid ${ATTN_KIND_COLOR[kind]}` }}>
+            <div style={{ flex: 1, minWidth: 0, fontFamily: T.body, fontSize: 12.5, color: T.text,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t.title}</div>
+            <span style={{ fontFamily: T.mono, fontSize: 9.5, color: T.textMuted, flexShrink: 0 }}>{project.key}</span>
+            <span style={{ fontFamily: T.mono, fontSize: 9.5, color: ATTN_KIND_COLOR[kind], flexShrink: 0 }}>{ATTN_KIND_LABEL[kind]}</span>
+          </div>
+        ))}
+      </div>
+      {items.length > 8 && (
+        <div style={{ fontFamily: T.body, fontSize: 11, color: T.textMuted, marginTop: 6, textAlign: "center" }}>
+          +{items.length - 8} more
+        </div>
+      )}
+    </div>
+  );
+};
+
 const WIDGET_BODY = {
   "my-tickets": MyTicketsWidget,
   "burndown": BurndownWidget,
   "notifications": NotificationsWidget,
   "worklog": WorkLogWidget,
+  "needs-attention": NeedsAttentionWidget,
 };
 
 // ─── Page ───────────────────────────────────────────────────────────────────────

@@ -115,6 +115,11 @@ export const api = {
     members:      (id)         => req("GET",    `/kb/projects/${id}/members`),
     addMember:    (id, userId) => req("POST",   `/kb/projects/${id}/members`, { userId }),
     removeMember: (id, userId) => req("DELETE", `/kb/projects/${id}/members/${userId}`),
+    needsAttention: (id, staleDays)  => req("GET", `/kb/projects/${id}/needs-attention${staleDays ? `?staleDays=${staleDays}` : ""}`),
+    activity:       (id, limit)      => req("GET", `/kb/projects/${id}/activity${limit ? `?limit=${limit}` : ""}`),
+    cumulativeFlow: (id, days)       => req("GET", `/kb/projects/${id}/cumulative-flow${days ? `?days=${days}` : ""}`),
+    cycleTime:      (id)             => req("GET", `/kb/projects/${id}/cycle-time`),
+    velocity:       (id)             => req("GET", `/kb/projects/${id}/velocity`),
   },
 
   versions: {

@@ -15,6 +15,7 @@ import TestRunsPage   from "./pages/TestRunsPage";
 import TestCasesPage  from "./pages/TestCasesPage";
 import UsersPage      from "./pages/UsersPage";
 import TeamsPage      from "./pages/TeamsPage";
+import ProjectsPage   from "./pages/ProjectsPage";
 import TraceabilityPage from "./pages/TraceabilityPage";
 import UserManualPage from "./pages/UserManualPage";
 import SettingsPage   from "./pages/SettingsPage";
@@ -35,6 +36,7 @@ const PAGE_TITLES = {
   traceability: "Traceability",
   users: "Users",
   teams: "Teams",
+  projects: "Projects",
   "user-manual": "User Manual",
   settings: "Settings",
 };
@@ -448,6 +450,7 @@ export default function App() {
             {nb("test-cases", "✓",  "Test Cases", true)}
             {nb("traceability", "🔗", "Traceability", true)}
             {isAdmin && <NavSection label="Admin" />}
+            {isAdmin && nb("projects", "📁", "Projects")}
             {isAdmin && nb("users", "👤", "Users")}
             {isAdmin && nb("teams", "👥", "Teams")}
           </nav>
@@ -465,6 +468,7 @@ export default function App() {
             {page === "test-runs"    && <TestRunsPage />}
             {page === "test-cases"   && <TestCasesPage />}
             {page === "traceability" && <TraceabilityPage />}
+            {page === "projects"     && isAdmin && <ProjectsPage />}
             {page === "users"        && isAdmin && <UsersPage />}
             {page === "teams"        && isAdmin && <TeamsPage />}
             {page === "user-manual"  && <UserManualPage />}

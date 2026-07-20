@@ -402,23 +402,28 @@ module.exports = function kanbanRoutes(app, ctx) {
 
   // ─── Projects ─────────────────────────────────────────────────────────────
 
+  // Projects joined to their lead's name — used by every route that returns a
+  // full project row so `mapKbProject`'s leadUserName is always populated.
+  const PROJECT_SELECT = `SELECT p.*, lu.name AS lead_user_name FROM kb_projects p LEFT JOIN users lu ON p.lead_user_id = lu.id`;
+  const getProjectRow = id => db.prepare(`${PROJECT_SELECT} WHERE p.id=?`).get(id);
+
   app.get("/api/kb/projects", auth(), (req, res) => {
     const ids = accessibleProjectIds(req.user);
     const rows = ids === null
-      ? db.prepare("SELECT * FROM kb_projects ORDER BY created_at ASC").all()
+      ? db.prepare(`${PROJECT_SELECT} ORDER BY p.created_at ASC`).all()
       : ids.length === 0 ? []
-      : db.prepare(`SELECT * FROM kb_projects WHERE id IN (${ids.map(() => "?").join(",")}) ORDER BY created_at ASC`).all(...ids);
+      : db.prepare(`${PROJECT_SELECT} WHERE p.id IN (${ids.map(() => "?").join(",")}) ORDER BY p.created_at ASC`).all(...ids);
     ok(res, rows.map(mapKbProject));
   });
 
   app.post("/api/kb/projects", write, (req, res) => {
-    const { name, key = "", color = "#6366f1", description = "" } = req.body || {};
+    const { name, key = "", color = "#6366f1", description = "", leadUserId = null } = req.body || {};
     if (!name) return err(res, "name required");
     const id     = `PRJ-${uid()}`;
     const now    = new Date().toISOString();
     const keyVal = key.trim().toUpperCase() || name.slice(0, 4).toUpperCase();
-    db.prepare("INSERT INTO kb_projects (id,name,key,color,description,created_at) VALUES (?,?,?,?,?,?)")
-      .run(id, name, keyVal, color, description, now);
+    db.prepare("INSERT INTO kb_projects (id,name,key,color,description,created_at,lead_user_id) VALUES (?,?,?,?,?,?,?)")
+      .run(id, name, keyVal, color, description, now, leadUserId || null);
     db.prepare("INSERT OR IGNORE INTO project_members (id,project_id,user_id,created_at) VALUES (?,?,?,?)")
       .run(`PM-${uid()}`, id, req.user.id, now);
     const DEFAULT_COLUMNS = [
@@ -434,16 +439,17 @@ module.exports = function kanbanRoutes(app, ctx) {
       db.prepare("INSERT INTO kb_columns (id,project_id,name,position,color,created_at) VALUES (?,?,?,?,?,?)")
         .run(`COL-${uid()}`, id, DEFAULT_COLUMNS[i].name, i, DEFAULT_COLUMNS[i].color, now);
     }
-    ok(res, mapKbProject(db.prepare("SELECT * FROM kb_projects WHERE id=?").get(id)), 201);
+    ok(res, mapKbProject(getProjectRow(id)), 201);
   });
 
   app.put("/api/kb/projects/:id", write, projectAccess, (req, res) => {
     const existing = db.prepare("SELECT * FROM kb_projects WHERE id=?").get(req.params.id);
     if (!existing) return err(res, "Not found", 404);
-    const { name = existing.name, key = existing.key, color = existing.color, description = existing.description } = req.body || {};
-    db.prepare("UPDATE kb_projects SET name=?,key=?,color=?,description=? WHERE id=?")
-      .run(name, key.toUpperCase(), color, description, req.params.id);
-    ok(res, mapKbProject(db.prepare("SELECT * FROM kb_projects WHERE id=?").get(req.params.id)));
+    const { name = existing.name, key = existing.key, color = existing.color, description = existing.description,
+            leadUserId = existing.lead_user_id } = req.body || {};
+    db.prepare("UPDATE kb_projects SET name=?,key=?,color=?,description=?,lead_user_id=? WHERE id=?")
+      .run(name, key.toUpperCase(), color, description, leadUserId || null, req.params.id);
+    ok(res, mapKbProject(getProjectRow(req.params.id)));
   });
 
   app.delete("/api/kb/projects/:id", write, projectAccess, (req, res) => {
@@ -570,6 +576,224 @@ module.exports = function kanbanRoutes(app, ctx) {
     `).run(`SNP-${uid()}`, req.params.id, today, remainingPoints, totalPoints, new Date().toISOString());
     const snapshots = db.prepare("SELECT * FROM kb_sprint_snapshots WHERE sprint_id=? ORDER BY date ASC").all(req.params.id).map(mapSprintSnapshot);
     ok(res, { sprint: mapSprint(sprint), totalPoints, remainingPoints, ticketCount: tix.length, snapshots });
+  });
+
+  // ─── Project Reports ──────────────────────────────────────────────────────
+  // Read-only aggregate views over a project's tickets, computed in JS from data
+  // already logged (ticket_status_history, ticket_comments) rather than SQL window
+  // functions/CTEs — node:sqlite is synchronous/in-process so there's no round-trip
+  // cost to amortize by pushing the work into SQL.
+
+  const median = arr => {
+    if (!arr.length) return null;
+    const s = [...arr].sort((a, b) => a - b);
+    const mid = Math.floor(s.length / 2);
+    return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+  };
+  const average = arr => arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : null;
+
+  app.get("/api/kb/projects/:id/needs-attention", auth(), projectAccess, (req, res) => {
+    const staleDays = Math.max(1, Number(req.query.staleDays) || 14);
+    const tickets = db.prepare(`${TICKET_JOIN} WHERE t.project_id=?`).all(req.params.id).map(mapTicket);
+    const openTickets = tickets.filter(t => !DONE_STATUSES.has(t.status));
+    const ids = openTickets.map(t => t.id);
+    const lastActivity = new Map();
+    if (ids.length) {
+      db.prepare(`SELECT ticket_id, MAX(changed_at) AS last FROM ticket_status_history WHERE ticket_id IN (${ids.map(() => "?").join(",")}) GROUP BY ticket_id`)
+        .all(...ids).forEach(r => lastActivity.set(r.ticket_id, r.last));
+    }
+    const today  = new Date().toISOString().slice(0, 10);
+    const staleMs = staleDays * 86400000;
+    const now = Date.now();
+    const unassigned = openTickets.filter(t => !t.assigneeId);
+    const overdue     = openTickets.filter(t => t.dueDate && t.dueDate < today);
+    const stale = openTickets
+      .map(t => ({ ...t, lastActivityAt: lastActivity.get(t.id) || t.createdAt }))
+      .filter(t => now - new Date(t.lastActivityAt).getTime() > staleMs);
+    ok(res, { unassigned, overdue, stale, staleDays });
+  });
+
+  app.get("/api/kb/projects/:id/activity", auth(), projectAccess, (req, res) => {
+    const limit = Math.min(Number(req.query.limit) || 100, 300);
+    const ticketRows = db.prepare("SELECT id, title FROM tickets WHERE project_id=?").all(req.params.id);
+    const titleById = new Map(ticketRows.map(t => [t.id, t.title]));
+    const ids = [...titleById.keys()];
+    if (ids.length === 0) return ok(res, { items: [] });
+    const placeholders = ids.map(() => "?").join(",");
+    const statusRows = db.prepare(`
+      SELECT h.id, h.ticket_id, h.from_status, h.to_status, h.changed_at, u.name AS user_name
+      FROM ticket_status_history h LEFT JOIN users u ON h.changed_by = u.id
+      WHERE h.ticket_id IN (${placeholders})
+    `).all(...ids);
+    const commentRows = db.prepare(`
+      SELECT c.id, c.ticket_id, c.body, c.created_at, u.name AS user_name
+      FROM ticket_comments c LEFT JOIN users u ON c.author_id = u.id
+      WHERE c.ticket_id IN (${placeholders})
+    `).all(...ids);
+    const items = [
+      ...statusRows.map(r => ({
+        id: r.id, kind: "status", ticketId: r.ticket_id, ticketTitle: titleById.get(r.ticket_id) || "(deleted)",
+        userName: r.user_name || "Unknown", at: r.changed_at, fromStatus: r.from_status, toStatus: r.to_status,
+      })),
+      ...commentRows.map(r => ({
+        id: r.id, kind: "comment", ticketId: r.ticket_id, ticketTitle: titleById.get(r.ticket_id) || "(deleted)",
+        userName: r.user_name || "Unknown", at: r.created_at, body: r.body,
+      })),
+    ].sort((a, b) => new Date(b.at) - new Date(a.at)).slice(0, limit);
+    ok(res, { items });
+  });
+
+  app.get("/api/kb/projects/:id/cumulative-flow", auth(), projectAccess, (req, res) => {
+    const tickets = db.prepare("SELECT id, status, created_at FROM tickets WHERE project_id=?").all(req.params.id);
+    const statuses = db.prepare("SELECT name FROM kb_columns WHERE project_id=? ORDER BY position ASC").all(req.params.id).map(c => c.name);
+    if (tickets.length === 0) return ok(res, { days: [], statuses, approximatedTicketCount: 0, totalTicketCount: 0 });
+
+    const ids = tickets.map(t => t.id);
+    const placeholders = ids.map(() => "?").join(",");
+    const historyRows = db.prepare(`
+      SELECT ticket_id, to_status, changed_at FROM ticket_status_history
+      WHERE ticket_id IN (${placeholders}) ORDER BY ticket_id ASC, changed_at ASC
+    `).all(...ids);
+
+    const historyByTicket = new Map();
+    let earliestChange = null;
+    for (const row of historyRows) {
+      if (!historyByTicket.has(row.ticket_id)) historyByTicket.set(row.ticket_id, []);
+      historyByTicket.get(row.ticket_id).push(row);
+      if (earliestChange === null || row.changed_at < earliestChange) earliestChange = row.changed_at;
+    }
+    const approximatedTicketCount = tickets.filter(t => !historyByTicket.has(t.id)).length;
+
+    // Clip the range to the earliest changed_at actually recorded — a blind
+    // 30/60/90-day default would open on a flat, wrong pre-history plateau for
+    // however long the table predates the requested window.
+    const requestedDays = Math.max(1, Math.min(Number(req.query.days) || 30, 180));
+    const requestedStart = new Date();
+    requestedStart.setHours(0, 0, 0, 0);
+    requestedStart.setDate(requestedStart.getDate() - (requestedDays - 1));
+    let startDate = requestedStart;
+    if (earliestChange) {
+      const earliestDate = new Date(earliestChange.slice(0, 10) + "T00:00:00");
+      if (earliestDate > startDate) startDate = earliestDate;
+    }
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const dayList = [];
+    for (let d = new Date(startDate); d <= today; d.setDate(d.getDate() + 1)) dayList.push(new Date(d));
+
+    // Single forward sweep: one pointer per ticket, advanced across the sorted
+    // day range rather than rescanning each ticket's full history per day.
+    const pointers = new Map();
+    for (const id of historyByTicket.keys()) pointers.set(id, 0);
+    const currentStatusForTicket = new Map();
+
+    const days = dayList.map(day => {
+      const dayEnd = new Date(day); dayEnd.setHours(23, 59, 59, 999);
+      const dayEndIso = dayEnd.toISOString();
+      const counts = {};
+      for (const s of statuses) counts[s] = 0;
+
+      for (const t of tickets) {
+        if (new Date(t.created_at) > dayEnd) continue; // not created yet as of this day
+
+        if (historyByTicket.has(t.id)) {
+          const hist = historyByTicket.get(t.id);
+          let ptr = pointers.get(t.id);
+          while (ptr < hist.length && hist[ptr].changed_at <= dayEndIso) {
+            currentStatusForTicket.set(t.id, hist[ptr].to_status);
+            ptr++;
+          }
+          pointers.set(t.id, ptr);
+        } else if (!currentStatusForTicket.has(t.id)) {
+          // No history at all (ticket predates the table) — disclosed
+          // approximation: seed at its current status for every day in range.
+          currentStatusForTicket.set(t.id, t.status);
+        }
+
+        const status = currentStatusForTicket.get(t.id);
+        if (status != null) counts[status] = (counts[status] || 0) + 1;
+      }
+
+      return { date: day.toISOString().slice(0, 10), counts };
+    });
+
+    ok(res, { days, statuses, approximatedTicketCount, totalTicketCount: tickets.length });
+  });
+
+  app.get("/api/kb/projects/:id/cycle-time", auth(), projectAccess, (req, res) => {
+    const tickets = db.prepare("SELECT id, status, created_at FROM tickets WHERE project_id=?").all(req.params.id);
+    if (tickets.length === 0)
+      return ok(res, { byStatus: [], overallCycleTimeAvgMs: null, overallCycleTimeMedianMs: null, ticketsReachedDone: 0, ticketsWithHistory: 0, totalTickets: 0 });
+
+    const ids = tickets.map(t => t.id);
+    const placeholders = ids.map(() => "?").join(",");
+    const historyRows = db.prepare(`
+      SELECT ticket_id, to_status, changed_at FROM ticket_status_history
+      WHERE ticket_id IN (${placeholders}) ORDER BY ticket_id ASC, changed_at ASC
+    `).all(...ids);
+
+    const historyByTicket = new Map();
+    for (const row of historyRows) {
+      if (!historyByTicket.has(row.ticket_id)) historyByTicket.set(row.ticket_id, []);
+      historyByTicket.get(row.ticket_id).push(row);
+    }
+
+    const now = Date.now();
+    const durationsByStatus = new Map();
+    const addDuration = (status, ms) => {
+      if (!durationsByStatus.has(status)) durationsByStatus.set(status, []);
+      durationsByStatus.get(status).push(ms);
+    };
+
+    const cycleTimes = [];
+    let ticketsWithHistory = 0;
+
+    for (const t of tickets) {
+      const hist = historyByTicket.get(t.id);
+      if (!hist || hist.length === 0) continue;
+      ticketsWithHistory++;
+
+      for (let i = 0; i < hist.length; i++) {
+        const row = hist[i];
+        const startMs = new Date(row.changed_at).getTime();
+        const next = hist[i + 1];
+        // Gap to the next transition is time spent in this row's to_status; for
+        // the most recent row, count elapsed time since then as "ongoing" only
+        // if the ticket's current status still matches (it should, always).
+        const endMs = next ? new Date(next.changed_at).getTime() : (t.status === row.to_status ? now : null);
+        if (endMs !== null) addDuration(row.to_status, endMs - startMs);
+      }
+
+      // Overall cycle time uses the ticket's FIRST-EVER entry into a done status,
+      // not the latest — otherwise a reopened-then-redone ticket is undercounted.
+      const firstDone = hist.find(r => DONE_STATUSES.has(r.to_status));
+      if (firstDone) cycleTimes.push(new Date(firstDone.changed_at).getTime() - new Date(t.created_at).getTime());
+    }
+
+    const byStatus = [...durationsByStatus.entries()].map(([status, arr]) => ({
+      status, count: arr.length, avgMs: average(arr), medianMs: median(arr),
+    }));
+
+    ok(res, {
+      byStatus,
+      overallCycleTimeAvgMs: average(cycleTimes),
+      overallCycleTimeMedianMs: median(cycleTimes),
+      ticketsReachedDone: cycleTimes.length,
+      ticketsWithHistory,
+      totalTickets: tickets.length,
+    });
+  });
+
+  app.get("/api/kb/projects/:id/velocity", auth(), projectAccess, (req, res) => {
+    const sprints = db.prepare("SELECT * FROM kb_sprints WHERE project_id=? ORDER BY created_at ASC").all(req.params.id);
+    const sprintStats = sprints.map(s => {
+      const tix = db.prepare("SELECT status, story_points FROM tickets WHERE sprint_id=?").all(s.id);
+      const totalPoints     = tix.reduce((sum, t) => sum + (t.story_points || 0), 0);
+      const completedPoints = tix.filter(t => DONE_STATUSES.has(t.status)).reduce((sum, t) => sum + (t.story_points || 0), 0);
+      return { sprintId: s.id, sprintName: s.name, status: s.status, totalPoints, completedPoints, ticketCount: tix.length };
+    });
+    ok(res, { sprints: sprintStats });
   });
 
   // ─── Columns ──────────────────────────────────────────────────────────────
